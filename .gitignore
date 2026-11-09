@@ -1,1 +1,8 @@
-data/echo __pycache__/echo *.pycecho avatar/*.pngecho build/echo dist/echo *.spec
+data/
+__pycache__/
+*.pyc
+avatar/*.png
+build/
+dist/
+*.spec
+*.spec
