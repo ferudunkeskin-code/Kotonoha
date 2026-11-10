@@ -92,7 +92,8 @@ class Renderer:
         return furigana.to_ruby_html(str(text or ""), self.mode, self.known)
 
     # ---------- sohbet ----------
-    def user_msg(self, text):
+    @staticmethod
+    def user_msg(text):
         return f'<div class="msg me"><div class="b">{esc(text).replace(chr(10), "<br>")}</div></div>'
 
     def ai_msg(self, data, speak_idx=None):

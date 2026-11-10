@@ -17,13 +17,15 @@ class ClaudeProvider(LLMProvider):
         self.model = model or DEFAULT_CLAUDE_MODEL
 
     def chat(self, system, messages, max_tokens=1500, temperature=0.7):
+        # Not: Yeni Claude modelleri ve güncel anthropic paketi 'temperature'
+        # ayarını kabul etmiyor; bu yüzden gönderilmiyor (parametre ortak arayüz
+        # için duruyor, OpenAI tarafı kullanıyor).
         try:
             resp = self.client.messages.create(
                 model=self.model,
                 system=system,
                 messages=normalize_messages(messages),
                 max_tokens=max_tokens,
-                temperature=temperature,
             )
         except Exception as e:
             raise LLMError(f"Claude hatası: {e}") from e
