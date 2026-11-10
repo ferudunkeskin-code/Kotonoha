@@ -31,6 +31,16 @@ class VoicevoxClient:
                 out.append((st["id"], f"{sp['name']} ({st['name']})", sp["name"]))
         return out
 
+    def warm_up(self, speaker_ids):
+        """Sesleri VOICEVOX'ta önceden belleğe yükler; ilk konuşma beklemesin."""
+        for sid in speaker_ids:
+            try:
+                requests.post(f"{self.host}/initialize_speaker",
+                              params={"speaker": int(sid), "skip_reinit": "true"},
+                              timeout=60)
+            except requests.RequestException:
+                return
+
     def synthesize(self, text: str, speaker: int, speed: float = 1.0):
         """(wav_baytları, zaman_çizelgesi) döner.
 

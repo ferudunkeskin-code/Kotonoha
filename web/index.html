@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Kotonoha 言の葉</title>
+<meta name="theme-color" content="#3e6b70">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Kotonoha">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js" defer></script>
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <div class="avatar-wrap"><canvas id="avatar" aria-label="Avatar"></canvas></div>
+    <div class="side-info">
+      <div id="char-name" class="char-name">Kotonoha</div>
+      <nav id="nav">
+        <button data-nav="home">🏠<span>Ana sayfa</span></button>
+        <button data-nav="free">💬<span>Serbest sohbet</span></button>
+        <button data-nav="progress">📈<span>İlerleme</span></button>
+        <button data-nav="settings">⚙️<span>Ayarlar</span></button>
+      </nav>
+    </div>
+  </aside>
+  <section id="right">
+    <header id="top">
+      <h1 id="title">Kotonoha</h1>
+      <label class="tr-toggle"><input type="checkbox" id="chk-tr"> Türkçe</label>
+      <select id="sel-furi" aria-label="Furigana">
+        <option value="unknown">Furigana: bilmediklerimde</option>
+        <option value="all">Furigana: hepsinde</option>
+        <option value="none">Furigana: kapalı</option>
+      </select>
+    </header>
+    <main id="main"><div id="content"></div></main>
+    <footer id="composer">
+      <textarea id="input" rows="2" placeholder="Japonca (ya da Türkçe) yaz…" disabled></textarea>
+      <button id="btn-mic" title="Konuş" disabled>🎤</button>
+      <button id="btn-send" disabled>Gönder</button>
+    </footer>
+  </section>
+</div>
+<div id="toast" role="status"></div>
+</body>
+</html>

@@ -2,9 +2,19 @@
 
 VOICEVOX açıksa: ses üretilir, çalınır ve ağız her hecenin sesli harfine göre değişir.
 VOICEVOX kapalıysa: ses olmadan, metin uzunluğuna göre basit bir ağız animasyonu yapılır.
+
+Hız için:
+- Üretilen sesler bellekte saklanır (aynı cümle ikinci kez anında çalar).
+- Ekrandaki cümleler arka planda önceden üretilebilir (prefetch).
+- Program açılırken seçili sesler VOICEVOX'ta ısıtılır (warm_up).
+- Çalma için hafif QSoundEffect kullanılır (FFmpeg açılışı beklenmez).
 """
+import threading
+import time
+from collections import OrderedDict
+
 from PyQt6.QtCore import QObject, QTimer, QElapsedTimer, QUrl, pyqtSignal
-from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PyQt6.QtMultimedia import QSoundEffect
 
 from ..voice.voicevox import mouth_at
 from ..paths import DATA_DIR
@@ -19,6 +29,8 @@ for vowel, chars in {
 }.items():
     for ch in chars:
         _KANA_VOWEL[ch] = vowel
+
+CACHE_SIZE = 300
 
 
 def fake_timeline(text, step=0.11):
@@ -46,11 +58,10 @@ class Speaker(QObject):
         self.jobs = jobs
         self.voicevox = None
         self.enabled = True
-        self.player = QMediaPlayer(self)
-        self.audio = QAudioOutput(self)
-        self.player.setAudioOutput(self.audio)
-        self.player.mediaStatusChanged.connect(self._on_status)
-        self.player.playbackStateChanged.connect(self._on_state)
+        self.effect = QSoundEffect(self)
+        self.effect.setVolume(1.0)
+        self.effect.playingChanged.connect(self._on_playing)
+        self.effect.statusChanged.connect(self._on_status)
         self.clock = QElapsedTimer()
         self.timeline = []
         self.timer = QTimer(self, interval=30)
@@ -59,12 +70,72 @@ class Speaker(QObject):
         self._file_toggle = 0
         self._token = 0
         self._fake = False
+        self._started = False
+        self._cache = OrderedDict()          # (metin, ses_id) -> (wav, zaman_çizelgesi)
+        self._cache_lock = threading.Lock()
+        self._prefetch_token = 0
 
     def configure(self, voicevox_client, enabled):
         self.voicevox = voicevox_client
         self.enabled = enabled
 
+    # ---------- önbellek ----------
+    def _cache_get(self, key):
+        with self._cache_lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+        return None
+
+    def _cache_put(self, key, value):
+        with self._cache_lock:
+            self._cache[key] = value
+            self._cache.move_to_end(key)
+            while len(self._cache) > CACHE_SIZE:
+                self._cache.popitem(last=False)
+
+    def _synth(self, text, speaker_id):
+        """Arka planda çalışır: önbellekte yoksa VOICEVOX'tan üretir."""
+        key = (text, int(speaker_id))
+        hit = self._cache_get(key)
+        if hit:
+            return hit
+        t0 = time.perf_counter()
+        res = self.voicevox.synthesize(text, int(speaker_id))
+        print(f"[ses] {time.perf_counter() - t0:.1f} sn'de üretildi: {text[:20]}")
+        self._cache_put(key, res)
+        return res
+
+    def _can_speak(self, speaker_id):
+        return self.enabled and self.voicevox is not None and speaker_id is not None
+
     # ---------- dışarıya açık ----------
+    def warm_up(self, speaker_ids):
+        """Seçili sesleri VOICEVOX'ta önceden yükler (ilk konuşma gecikmesin)."""
+        if not self.enabled or self.voicevox is None:
+            return
+        ids = [int(s) for s in speaker_ids if s is not None]
+        if ids:
+            self.jobs.run(self.voicevox.warm_up, ids, on_fail=lambda e: None)
+
+    def prefetch(self, items):
+        """Ekrandaki cümleleri sırayla arka planda üretir (tıklayınca anında çalsın)."""
+        self._prefetch_token += 1
+        token = self._prefetch_token
+        todo = [(t, s) for t, s in items if t and self._can_speak(s)]
+        if not todo:
+            return
+
+        def work():
+            for text, sid in todo:
+                if token != self._prefetch_token:
+                    return  # ekran değişti
+                try:
+                    self._synth(text, sid)
+                except Exception:
+                    return
+        self.jobs.run(work, on_fail=lambda e: None)
+
     def say(self, text, speaker_id):
         self.stop()
         self.queue = [(text, speaker_id)]
@@ -80,8 +151,9 @@ class Speaker(QObject):
         self.queue = []
         self.timer.stop()
         self._fake = False
-        if self.player.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
-            self.player.stop()
+        self._started = False
+        if self.effect.isPlaying():
+            self.effect.stop()
         self.avatar.set_mouth("closed")
 
     # ---------- iç işleyiş ----------
@@ -92,8 +164,12 @@ class Speaker(QObject):
             return
         text, speaker_id = self.queue.pop(0)
         token = self._token
-        if self.enabled and self.voicevox is not None and speaker_id is not None:
-            self.jobs.run(self.voicevox.synthesize, text, int(speaker_id),
+        if self._can_speak(speaker_id):
+            hit = self._cache_get((text, int(speaker_id)))
+            if hit:
+                self._play(hit, token)
+                return
+            self.jobs.run(self._synth, text, int(speaker_id),
                           on_done=lambda res, tk=token: self._play(res, tk),
                           on_fail=lambda err, tk=token, tx=text: self._fallback(err, tx, tk))
         else:
@@ -112,7 +188,6 @@ class Speaker(QObject):
         self._file_toggle ^= 1
         path = DATA_DIR / f"_speech_{self._file_toggle}.wav"
         try:
-            self.player.setSource(QUrl())
             path.write_bytes(wav)
         except OSError as e:
             self.error.emit(f"Ses dosyası yazılamadı: {e}")
@@ -120,8 +195,9 @@ class Speaker(QObject):
             return
         self.timeline = timeline
         self._fake = False
-        self.player.setSource(QUrl.fromLocalFile(str(path)))
-        self.player.play()
+        self._started = False
+        self.effect.setSource(QUrl.fromLocalFile(str(path)))
+        self.effect.play()        # dosya yüklenince kendiliğinden başlar
 
     def _play_fake(self, text):
         self.timeline = fake_timeline(text)
@@ -129,17 +205,21 @@ class Speaker(QObject):
         self.clock.start()
         self.timer.start()
 
-    def _on_state(self, state):
-        if state == QMediaPlayer.PlaybackState.PlayingState and not self._fake:
+    def _on_playing(self):
+        if self._fake:
+            return
+        if self.effect.isPlaying():
+            self._started = True
             self.clock.start()
             self.timer.start()
-
-    def _on_status(self, status):
-        if status == QMediaPlayer.MediaStatus.EndOfMedia and not self._fake:
+        elif self._started:
+            self._started = False
             self.timer.stop()
             self.avatar.set_mouth("closed")
-            QTimer.singleShot(250, self._next)
-        elif status == QMediaPlayer.MediaStatus.InvalidMedia:
+            QTimer.singleShot(200, self._next)
+
+    def _on_status(self):
+        if self.effect.status() == QSoundEffect.Status.Error and not self._fake:
             self.error.emit("Ses çalınamadı.")
             self.timer.stop()
             self.avatar.set_mouth("closed")

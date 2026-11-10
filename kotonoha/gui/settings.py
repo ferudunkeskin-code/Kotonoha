@@ -20,6 +20,7 @@ DEFAULTS = {
     "persona": "Sakin, meraklı ve biraz esprili. Çizime, edebiyata ve oyunlara ilgi duyar. "
                "Hata yapmaktan korkmamayı öğütler.",
     "learner_name": "",
+    "stt_model": "small", "stt_device": "cpu",
 }
 
 
@@ -113,6 +114,26 @@ class SettingsDialog(QDialog):
                          "“VOICEVOX:Karakter adı” kredisi gösterilir (kullanım şartı).</small>"))
         root.addWidget(g3)
 
+        # --- mikrofon ---
+        g4 = QGroupBox("Mikrofon (Whisper, bilgisayarda çalışır)")
+        f4 = QFormLayout(g4)
+        self.stt_model = QComboBox()
+        for size, label in (("base", "base · hızlı, zayıf (~150 MB)"),
+                            ("small", "small · dengeli (~470 MB) — önerilen"),
+                            ("medium", "medium · daha iyi, yavaş (~1,5 GB)"),
+                            ("large-v3", "large-v3 · en iyi, ekran kartı ister (~3 GB)")):
+            self.stt_model.addItem(label, size)
+        self.stt_model.setCurrentIndex(max(0, self.stt_model.findData(self.s.get("stt_model"))))
+        self.stt_device = QComboBox()
+        self.stt_device.addItem("İşlemci (CPU) — her bilgisayarda çalışır", "cpu")
+        self.stt_device.addItem("Ekran kartı (NVIDIA CUDA) — hızlı, ek kurulum ister", "cuda")
+        self.stt_device.setCurrentIndex(max(0, self.stt_device.findData(self.s.get("stt_device"))))
+        f4.addRow("Model:", self.stt_model)
+        f4.addRow("Çalışacağı yer:", self.stt_device)
+        f4.addRow(QLabel("<small>Model ilk kullanımda bir kez indirilir. Ekran kartı "
+                         "çalışmazsa program kendiliğinden işlemciye geçer.</small>"))
+        root.addWidget(g4)
+
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Save |
                               QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(self.save)
@@ -154,6 +175,8 @@ class SettingsDialog(QDialog):
         s.set("persona", self.persona.toPlainText().strip())
         s.set("learner_name", self.learner.text().strip())
         s.set("voice_enabled", self.voice_on.isChecked())
+        s.set("stt_model", self.stt_model.currentData())
+        s.set("stt_device", self.stt_device.currentData())
         s.set("voicevox_host", self.vv_host.text().strip())
         for combo, key in ((self.voice_main, "voice_main"), (self.voice_partner, "voice_partner")):
             data = combo.currentData()

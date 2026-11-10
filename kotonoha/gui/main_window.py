@@ -2,7 +2,7 @@
 import html
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QKeyEvent, QFont
+from PyQt6.QtGui import QKeyEvent, QFont, QTextCursor
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton,
                              QPlainTextEdit, QLabel, QTreeWidget, QTreeWidgetItem, QCheckBox,
                              QComboBox, QFrame, QStatusBar, QMessageBox, QApplication)
@@ -13,6 +13,7 @@ from ..curriculum.loader import Curriculum
 from ..llm import make_provider, LLMError
 from ..tutor.engine import Tutor
 from ..voice.voicevox import VoicevoxClient
+from ..voice import stt
 from ..japanese import furigana
 from .render import Renderer, act, esc, para
 from .webview import ContentView
@@ -61,10 +62,14 @@ class MainWindow(QMainWindow):
         self.quiz = None
         self.srs = None
         self.busy = False
+        self._gen = 0             # ekran değişince eski cevaplar yok sayılır
+        self.recorder = None
+        self._rec_timer = None
 
         self._build_ui()
         self.apply_settings()
         QTimer.singleShot(200, self.show_home)
+        QTimer.singleShot(800, self._auto_voice)
 
     # ================= arayüz =================
     def _build_ui(self):
@@ -152,7 +157,8 @@ class MainWindow(QMainWindow):
         self.btn_mic = QPushButton("🎤")
         self.btn_mic.setFixedSize(50, 70)
         self.btn_mic.setEnabled(False)
-        self.btn_mic.setToolTip("Mikrofonla konuşma 2. aşamada (Whisper) eklenecek")
+        self.btn_mic.setToolTip("Bas, Japonca konuş, bitince tekrar bas")
+        self.btn_mic.clicked.connect(self.toggle_mic)
         bottom.addWidget(self.input, 1)
         bottom.addWidget(self.btn_mic)
         bottom.addWidget(self.btn_send)
@@ -177,6 +183,7 @@ class MainWindow(QMainWindow):
         self.view.set_translation(s.get("show_tr"))
         vv = VoicevoxClient(s.get("voicevox_host")) if s.get("voice_enabled") else None
         self.speaker.configure(vv, s.get("voice_enabled"))
+        self.speaker.warm_up([s.get("voice_main"), s.get("voice_partner")])
         credits = {n for n in (s.get("voice_main_name"), s.get("voice_partner_name")) if n}
         self.lbl_credit.setText(("Ses: " + " / ".join(f"VOICEVOX:{c}" for c in sorted(credits)))
                                 if s.get("voice_enabled") and credits else "")
@@ -222,18 +229,33 @@ class MainWindow(QMainWindow):
         self.btn_srs.setText(f"🔁  Kelime tekrarı ({due})" if due else "🔁  Kelime tekrarı")
 
     # ================= yardımcılar =================
+    def _guard(self, fn):
+        """Bu ekran açıkken başlayan işin sonucu, ekran değişmişse yok sayılır."""
+        gen = self._gen
+        return lambda *a: fn(*a) if gen == self._gen else None
+
+    def _new_gen(self):
+        self._gen += 1
+        if self.busy:
+            self.set_busy(False)
+        self._stop_recording(discard=True)
+
     def set_mode(self, mode, title):
+        self._new_gen()
         self.end_session()
         self.speaker.stop()
         self.mode = mode
         self.lbl_title.setText(title)
         self.step_bar.setVisible(mode == "unit")
         self.speak_items = []
+        self.speaker.prefetch([])   # önceki ekranın ön hazırlığını durdur
         self.set_input(mode == "free")
 
     def set_input(self, enabled, placeholder=None):
         self.input.setEnabled(enabled)
         self.btn_send.setEnabled(enabled)
+        if self.recorder is None:
+            self.btn_mic.setEnabled(enabled)
         if placeholder:
             self.input.setPlaceholderText(placeholder)
 
@@ -289,6 +311,11 @@ class MainWindow(QMainWindow):
         if not furigana.available():
             warn += Renderer.error("Furigana modülü (fugashi + unidic-lite) bulunamadı; "
                                    "metinler furiganasız gösterilecek. Kurulum: pip install fugashi unidic-lite")
+        if self.settings.get("voice_enabled") and self.settings.get("voice_main") is None:
+            warn += ('<div class="card">🔈 Avatar şimdilik <b>sessiz</b> konuşuyor. Ses için '
+                     'VOICEVOX programını açın, sonra ⚙ Ayarlar → <b>Sesleri VOICEVOX\'tan yükle</b> '
+                     've bir ses seçin. (VOICEVOX açıkken Kotonoha\'yı başlatırsanız ses '
+                     'kendiliğinden seçilir.)</div>')
         greet = f"こんにちは{('、' + esc(learner) + 'さん') if learner else ''}！"
         level = self.db.get("level_estimate")
         cards = [f'<h1>{greet}</h1><div class="muted">Ben {esc(name)}. Bugün ne çalışalım?</div>', warn]
@@ -346,7 +373,7 @@ class MainWindow(QMainWindow):
         self.set_busy(True)
         self.jobs.run(tutor.converse, self.session_id, text, mode=kind, unit_id=self.unit_id,
                       step=self.step, unit_content=self.content,
-                      on_done=self.on_reply, on_fail=self.show_error)
+                      on_done=self._guard(self.on_reply), on_fail=self._guard(self.show_error))
 
     def on_reply(self, data):
         self.set_busy(False)
@@ -386,7 +413,7 @@ class MainWindow(QMainWindow):
                            f'İlk açılışta 30-60 saniye sürebilir; sonra kaydedilir ve hemen açılır.</div>')
         self.set_busy(True)
         self.jobs.run(tutor.unit_content, unit_id, regenerate,
-                      on_done=self._unit_ready, on_fail=self.show_error)
+                      on_done=self._guard(self._unit_ready), on_fail=self._guard(self.show_error))
 
     def _unit_ready(self, content):
         self.set_busy(False)
@@ -400,6 +427,7 @@ class MainWindow(QMainWindow):
             for b in self.step_buttons.values():
                 b.setChecked(False)
             return
+        self._new_gen()
         self.end_session()
         self.speaker.stop()
         self.step = step
@@ -445,6 +473,7 @@ class MainWindow(QMainWindow):
             body = r.quiz_question(c["quiz"][0], 0, len(c["quiz"]))
             self.set_input(False, "Değerlendirmede seçeneklere tıkla.")
         self.view.set_main(header + body + regen)
+        self.speaker.prefetch(self.speak_items)   # tıklayınca anında çalsın
 
         if step == "roleplay":
             self.new_session("roleplay")
@@ -480,7 +509,7 @@ class MainWindow(QMainWindow):
             return
         self.set_busy(True)
         self.jobs.run(tutor.check_writing, self.unit_id, self.content, text,
-                      on_done=self._writing_done, on_fail=self.show_error)
+                      on_done=self._guard(self._writing_done), on_fail=self._guard(self.show_error))
 
     def _writing_done(self, fb):
         self.set_busy(False)
@@ -661,7 +690,112 @@ class MainWindow(QMainWindow):
             self.apply_settings()
             self.status.showMessage("Ayarlar kaydedildi.", 4000)
 
+    # ================= ses: VOICEVOX'u kendiliğinden bağla =================
+    def _auto_voice(self):
+        """Ses seçilmemişse ve VOICEVOX açıksa, önerilen sesleri kendiliğinden seçer."""
+        s = self.settings
+        if not s.get("voice_enabled") or s.get("voice_main") is not None:
+            return
+        client = VoicevoxClient(s.get("voicevox_host"))
+
+        def probe():
+            return client.speakers() if client.available() else None
+        self.jobs.run(probe, on_done=self._auto_voice_done, on_fail=lambda e: None)
+
+    def _auto_voice_done(self, voices):
+        if not voices or self.settings.get("voice_main") is not None:
+            return
+
+        def pick(prefs, avoid=None):
+            for name in prefs:
+                for sid, label, char in voices:
+                    if char == name and sid != avoid:
+                        return sid, char
+            for sid, label, char in voices:
+                if sid != avoid:
+                    return sid, char
+            return voices[0][0], voices[0][2]
+        main = pick(["冥鳴ひまり", "四国めたん"])
+        partner = pick(["青山龍星", "玄野武宏"], avoid=main[0])
+        s = self.settings
+        s.set("voice_main", int(main[0]))
+        s.set("voice_main_name", main[1])
+        s.set("voice_partner", int(partner[0]))
+        s.set("voice_partner_name", partner[1])
+        self.apply_settings()
+        self.status.showMessage(f"VOICEVOX bulundu; sesler seçildi: {main[1]} / {partner[1]}", 8000)
+        if self.mode == "home":
+            self.show_home()
+
+    # ================= mikrofon =================
+    def toggle_mic(self):
+        if self.recorder is not None:
+            self._stop_recording()
+            return
+        if not stt.available():
+            QMessageBox.information(
+                self, "Mikrofon",
+                "Mikrofon için iki paket gerekiyor. Programı kapatıp Anaconda Prompt'ta:\n\n"
+                "conda activate kotonoha\npip install faster-whisper sounddevice\n\n"
+                f"(Eksik: {', '.join(stt.missing())})")
+            return
+        if self.busy or not self.input.isEnabled():
+            return
+        self.speaker.stop()
+        try:
+            self.recorder = stt.Recorder()
+            self.recorder.start()
+        except Exception as e:
+            self.recorder = None
+            self.status.showMessage(f"Mikrofon açılamadı: {e}", 8000)
+            return
+        self.btn_mic.setText("⏹")
+        self.btn_mic.setStyleSheet("background:#b5523b;color:white;font-size:18px")
+        self.status.showMessage("🎤 Dinliyorum… Bitince ⏹ düğmesine bas.")
+        self._rec_timer = QTimer(self, singleShot=True)
+        self._rec_timer.timeout.connect(self._stop_recording)
+        self._rec_timer.start(stt.MAX_SECONDS * 1000)
+
+    def _stop_recording(self, discard=False):
+        if self.recorder is None:
+            return
+        if self._rec_timer:
+            self._rec_timer.stop()
+        audio = self.recorder.stop()
+        self.recorder = None
+        self.btn_mic.setText("🎤")
+        self.btn_mic.setStyleSheet("")
+        if discard:
+            self.status.clearMessage()
+            return
+        if stt.Recorder.seconds(audio) < 0.4:
+            self.btn_mic.setEnabled(self.input.isEnabled())
+            self.status.showMessage("Ses alınamadı ya da çok kısa.", 5000)
+            return
+        self.btn_mic.setEnabled(False)
+        self.status.showMessage("✍️ Yazıya çevriliyor… (ilk kullanımda konuşma modeli "
+                                "indirilir; birkaç dakika sürebilir)")
+        self.jobs.run(stt.transcribe, audio, self.settings.get("stt_model"),
+                      self.settings.get("stt_device"),
+                      on_done=self._guard(self._mic_text), on_fail=self._guard(self._mic_fail))
+
+    def _mic_text(self, text):
+        self.btn_mic.setEnabled(self.input.isEnabled())
+        if not text:
+            self.status.showMessage("Konuşma anlaşılamadı, tekrar dener misin?", 6000)
+            return
+        cur = self.input.toPlainText().strip()
+        self.input.setPlainText((cur + " " if cur else "") + text)
+        self.input.moveCursor(QTextCursor.MoveOperation.End)
+        self.input.setFocus()
+        self.status.showMessage("Yazıyı kontrol et, düzelt istersen; sonra Enter.", 8000)
+
+    def _mic_fail(self, err):
+        self.btn_mic.setEnabled(self.input.isEnabled())
+        self.status.showMessage(f"Yazıya çevirme hatası: {err}", 10000)
+
     def closeEvent(self, e):
+        self._stop_recording(discard=True)
         self.speaker.stop()
         sid = self.session_id
         self.session_id = None
