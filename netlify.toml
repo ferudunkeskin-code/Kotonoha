@@ -1,0 +1,4 @@
+# Netlify: yalnizca web/ klasorunu yayinla (iPad surumu)
+[build]
+  publish = "web"
+  command = ""
