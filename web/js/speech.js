@@ -56,6 +56,7 @@ export function mouthAt(tl, t) {
 const synth = typeof window !== "undefined" ? window.speechSynthesis : null;
 let voices = [];
 let unlocked = false;
+let justCancelled = false;
 let current = null;            // {utter, raf, onEnd}
 let secPerMora = 0.135;        // iPad Kyoko ~ hız 1.0 için başlangıç tahmini; ölçtükçe düzelir
 
@@ -83,12 +84,14 @@ function pickVoice(name) {
 export function unlock() {
   if (unlocked || !synth) return;
   unlocked = true;
-  try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; synth.speak(u); } catch (e) { /* */ }
+  // iPad: ilk konuşma bir dokunuşun içinde başlamalı; sessiz, kısa bir Japonca hece söyletiyoruz.
+  try { const u = new SpeechSynthesisUtterance("あ"); u.lang = "ja-JP"; u.volume = 0; u.rate = 2; synth.speak(u); }
+  catch (e) { /* */ }
 }
 
 export function stop() {
   if (current) { cancelAnimationFrame(current.raf); const cb = current.onEnd; current = null; cb?.(true); }
-  if (synth?.speaking || synth?.pending) synth.cancel();
+  if (synth?.speaking || synth?.pending) { synth.cancel(); justCancelled = true; }
 }
 
 /**
@@ -120,10 +123,14 @@ export function speak(text, { voiceName = "", rate = 0.9, silent = false, onMout
     job.onEnd();
   };
 
-  if (!voice || !synth) { begin(); return; }
+  if (silent || !synth) { begin(); return; }
 
+  // iPad, ana ekrana eklenmiş uygulamada ses listesini bazen boş verir. O zaman ses
+  // nesnesi seçmeden yalnızca dili "ja-JP" yapıyoruz; iPad kendi Japonca sesini kullanır.
   const u = new SpeechSynthesisUtterance(text);
-  u.voice = voice; u.lang = voice.lang || "ja-JP"; u.rate = rate;
+  if (voice) u.voice = voice;
+  u.lang = voice?.lang || "ja-JP";
+  u.rate = rate;
   u.onstart = () => { if (current === job) begin(); };
   u.onend = () => {
     if (current !== job) return;
@@ -137,7 +144,9 @@ export function speak(text, { voiceName = "", rate = 0.9, silent = false, onMout
   };
   u.onerror = () => finish();
   job.utter = u;            // Safari'de çöpe gitmesin
-  synth.speak(u);
+  // Safari: cancel()'dan hemen sonra speak() çağrılırsa ses bazen yutuluyor; kısa bir ara ver.
+  const go = () => { if (current !== job) return; try { synth.resume(); } catch (e) { /* */ } synth.speak(u); };
+  if (justCancelled) { justCancelled = false; setTimeout(go, 120); } else go();
   // bazı durumlarda onstart gelmez: yarım saniye sonra animasyonu yine de başlat
   setTimeout(() => { if (current === job && !job.start) begin(); }, 600);
 }

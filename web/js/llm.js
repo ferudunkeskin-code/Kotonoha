@@ -38,11 +38,23 @@ async function post(url, headers, body) {
   try { data = await res.json(); } catch (e) { /* boş cevap */ }
   if (!res.ok) {
     const msg = data?.error?.message || res.statusText;
-    if (res.status === 401) throw new LLMError("API anahtarı geçersiz. ⚙ Ayarlar'dan kontrol edin.");
+    if (res.status === 401) throw new LLMError(`API anahtarı reddedildi (401). Sunucunun cevabı: ${msg}`);
     if (res.status === 429) throw new LLMError("Çok sık istek ya da bakiye bitti: " + msg);
     throw new LLMError(`Yapay zekâ hatası (${res.status}): ${msg}`);
   }
   return data;
+}
+
+// Kopyala-yapıştırda araya giren boşluk, satır sonu ve görünmez karakterleri temizler.
+export function cleanKey(k) {
+  return String(k || "").replace(/[\s\u200B-\u200D\u2060\uFEFF\u00A0]/g, "")
+    .replace(/[\u2010-\u2015\u2212]/g, "-");   // telefonun "akıllı" tirelerini düz tireye çevir
+}
+
+export function describeKey(k) {
+  k = cleanKey(k);
+  if (!k) return "girilmemiş";
+  return `${k.slice(0, 10)}…${k.slice(-4)} (${k.length} karakter)`;
 }
 
 export async function chat(s, system, messages, maxTokens = 1500) {
@@ -50,7 +62,7 @@ export async function chat(s, system, messages, maxTokens = 1500) {
   if (s.provider === "openai") {
     if (!s.openai_key) throw new LLMError("API_KEY_MISSING");
     const d = await post("https://api.openai.com/v1/chat/completions",
-      { "content-type": "application/json", authorization: `Bearer ${s.openai_key}` },
+      { "content-type": "application/json", authorization: `Bearer ${cleanKey(s.openai_key)}` },
       { model: s.openai_model || "gpt-4o", max_tokens: maxTokens,
         messages: [{ role: "system", content: system }, ...msgs] });
     return d.choices?.[0]?.message?.content || "";
@@ -58,7 +70,7 @@ export async function chat(s, system, messages, maxTokens = 1500) {
   if (!s.claude_key) throw new LLMError("API_KEY_MISSING");
   const d = await post("https://api.anthropic.com/v1/messages", {
     "content-type": "application/json",
-    "x-api-key": s.claude_key,
+    "x-api-key": cleanKey(s.claude_key),
     "anthropic-version": "2023-06-01",
     "anthropic-dangerous-direct-browser-access": "true",
   }, { model: s.claude_model || "claude-sonnet-5-5", max_tokens: maxTokens, system, messages: msgs });

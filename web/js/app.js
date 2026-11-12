@@ -4,9 +4,9 @@ import * as tutor from "./tutor.js";
 import * as furi from "./furigana.js";
 import * as speech from "./speech.js";
 import { Avatar } from "./avatar.js";
-import { LLMError } from "./llm.js";
+import { LLMError, chat, cleanKey, describeKey } from "./llm.js";
 
-export const APP_VERSION = "0.1.0-web";
+export const APP_VERSION = "0.1.2-web";
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
 
@@ -102,7 +102,11 @@ function endSession() {
   const sid = state.sessionId;
   state.sessionId = null;
   if (sid && store.userMessageCount(sid) >= 3 && store.apiKey()) {
-    tutor.summarize(sid).catch(() => {});
+    // Özet birkaç saniye sürer; bitince İlerleme ekranı açıksa kendini yeniler.
+    state.summarizing = tutor.summarize(sid).catch(() => {}).then(() => {
+      state.summarizing = null;
+      if (state.mode === "progress") showProgress();
+    });
   }
 }
 
@@ -236,6 +240,7 @@ function showProgress() {
   const facts = store.facts(20).map(f => `<span class="pill">${esc(f)}</span>`).join("");
   const sums = store.recentSummaries(6).map(s => `<li>${esc(s)}</li>`).join("");
   ui.content.innerHTML = `<h2>İlerleme</h2>
+    ${state.summarizing ? '<div class="card muted">⏳ Son sohbetin özeti çıkarılıyor; bu sayfa birazdan kendini yenileyecek.</div>' : ""}
     <div class="card"><b>Tahmini seviye:</b> ${esc(store.get("level_estimate") || "henüz belli değil")}</div>
     <div class="card"><b>Kelimeler</b><br>Toplam ${st.total} · İyi bilinen ${st.known} · Tekrar bekleyen ${st.due}</div>
     <div class="card"><b>Sık yapılan hatalar</b>${mist ? `<table><tr><th>Tür</th><th>Sayı</th><th>Son örnek</th></tr>${mist}</table>`
@@ -255,10 +260,13 @@ function showSettings() {
   <div class="card"><b>Yapay zekâ</b>
     <label>Kullanılacak</label>
     <select id="f-provider"><option value="claude">Claude (Anthropic)</option><option value="openai">OpenAI (ChatGPT)</option></select>
-    <label>Claude API anahtarı</label><input type="password" id="f-ckey" autocomplete="off" value="${esc(s.claude_key)}">
+    <label>Claude API anahtarı</label><input type="password" id="f-ckey" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(s.claude_key)}">
+    <div class="hint">Kayıtlı: ${esc(describeKey(s.claude_key))}</div>
     <label>Claude modeli</label><input type="text" id="f-cmodel" value="${esc(s.claude_model)}" autocapitalize="off">
-    <label>OpenAI API anahtarı</label><input type="password" id="f-okey" autocomplete="off" value="${esc(s.openai_key)}">
+    <label>OpenAI API anahtarı</label><input type="password" id="f-okey" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(s.openai_key)}">
     <label>OpenAI modeli</label><input type="text" id="f-omodel" value="${esc(s.openai_model)}" autocapitalize="off">
+    <button class="btn alt" data-act="test-key">🔌 Bağlantıyı dene</button>
+    <div id="f-keytest" class="hint"></div>
     <div class="hint">Anahtarlar yalnızca bu cihazda saklanır; yedek dosyasına da girmez.</div>
   </div>
   <div class="card"><b>Karakter ve öğrenci</b>
@@ -290,8 +298,8 @@ function readSettingsForm() {
   const v = id => $(id).value.trim();
   return {
     provider: $("#f-provider").value,
-    claude_key: v("#f-ckey"), claude_model: v("#f-cmodel") || "claude-sonnet-5-5",
-    openai_key: v("#f-okey"), openai_model: v("#f-omodel") || "gpt-4o",
+    claude_key: cleanKey(v("#f-ckey")), claude_model: v("#f-cmodel") || "claude-sonnet-5-5",
+    openai_key: cleanKey(v("#f-okey")), openai_model: v("#f-omodel") || "gpt-4o",
     character_name: v("#f-name") || "Kotonoha", persona: v("#f-persona"), learner_name: v("#f-learner"),
     voice_on: $("#f-voice").checked, voice_name: $("#f-vname").value, rate: Number($("#f-rate").value),
   };
@@ -305,6 +313,19 @@ function saveSettings() {
   applySettings();
   toast("Ayarlar kaydedildi.");
   catchUpSummaries();
+}
+
+async function testKey() {
+  const f = readSettingsForm();
+  const out = $("#f-keytest");
+  const key = f.provider === "openai" ? f.openai_key : f.claude_key;
+  out.textContent = `Deneniyor… anahtar: ${describeKey(key)}`;
+  try {
+    const reply = await chat({ ...S(), ...f }, "Kısa cevap ver.", [{ role: "user", content: "「はい」とだけ答えて" }], 20);
+    out.innerHTML = `✅ Bağlantı çalışıyor. Cevap: ${esc(reply)} — şimdi <b>Kaydet</b>'e basın.`;
+  } catch (e) {
+    out.textContent = `❌ ${e.message}  ·  Anahtar: ${describeKey(key)}`;
+  }
 }
 
 function testVoice() {
@@ -354,6 +375,7 @@ ui.content.addEventListener("click", e => {
   else if (act === "tr") t.parentNode.querySelector(".tr")?.classList.toggle("open");
   else if (act === "save-settings") saveSettings();
   else if (act === "test-voice") testVoice();
+  else if (act === "test-key") testKey();
   else if (act === "export") exportBackup();
 });
 
