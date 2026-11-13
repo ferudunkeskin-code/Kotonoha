@@ -97,6 +97,10 @@ th { font-size: 13px; color: var(--muted); }
 .form .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .form .hint { font-size: 13px; color: var(--muted); }
 
+#update-bar { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px 16px;
+  background: #fff3cf; border-bottom: 1px solid #ecd9a0; font-size: 16px; }
+#update-bar[hidden] { display: none; }
+#update-bar button { border: 0; background: var(--accent2); color: white; border-radius: 999px; padding: 6px 16px; font-size: 16px; cursor: pointer; }
 #toast { position: fixed; left: 50%; bottom: calc(150px + env(safe-area-inset-bottom)); transform: translateX(-50%);
   background: #2b2724; color: white; padding: 8px 16px; border-radius: 999px; font-size: 15px;
   opacity: 0; pointer-events: none; transition: opacity .25s; max-width: 90vw; text-align: center; }

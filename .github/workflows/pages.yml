@@ -26,6 +26,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - name: Surum bilgisini yaz (uygulama yeni surumu bundan anlar)
+        run: echo "{\"build\":\"${GITHUB_SHA::7}\",\"time\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > web/version.json
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web

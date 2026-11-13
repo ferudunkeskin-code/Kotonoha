@@ -8,7 +8,7 @@ import { Avatar } from "./avatar.js";
 import { LLMError, chat, cleanKey, describeKey } from "./llm.js";
 import { VoiceMode, voiceModeAvailable } from "./voicemode.js";
 
-export const APP_VERSION = "0.3.1-web";
+export const APP_VERSION = "0.3.2-web";
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
 
@@ -445,7 +445,10 @@ function showSettings() {
     <label class="btn alt" style="margin-top:6px">⬆ Yedekten geri yükle<input type="file" id="f-import" accept=".json,application/json" hidden></label>
   </div>
   <button class="btn warm" data-act="save-settings">Kaydet</button>
-  <div class="muted" style="margin-top:20px">Kotonoha ${APP_VERSION}</div></div>`;
+  <div class="card"><b>Güncelleme</b>
+    <div class="muted">Kotonoha ${APP_VERSION}${loadedBuild ? " · yapı " + esc(loadedBuild) : ""}</div>
+    <button class="btn alt" data-act="update-check">🔄 Güncellemeyi denetle ve yenile</button>
+  </div></div>`;
   $("#f-provider").value = s.provider;
   // Hız ve bekleme süresi değiştiği anda kaydedilir ("Kaydet"e basmak gerekmez).
   $("#f-rate").oninput = e => setRate(Number(e.target.value));
@@ -538,6 +541,7 @@ ui.content.addEventListener("click", e => {
   else if (act === "save-settings") saveSettings();
   else if (act === "test-voice") testVoice();
   else if (act === "test-key") testKey();
+  else if (act === "update-check") checkUpdate(true);
   else if (act === "text-start") startTextFromForm();
   else if (act === "text-again") startText(store.get("study_text", ""), store.get("study_kind", "exam"));
   else if (act === "export") exportBackup();
@@ -587,4 +591,41 @@ furi.init().then(t => {
   if (!t) toast("Furigana sözlüğü yüklenemedi; metinler furiganasız gösterilecek.", 6000);
 });
 catchUpSummaries();
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").then(r => r.update()).catch(() => {});
+}
+
+// ================= güncelleme =================
+// Her yayında GitHub version.json'a yeni bir "yapı" kimliği yazar. Uygulama açıldığında
+// hangi yapıyla açıldığını hatırlar; öne gelince ve yarım saatte bir yeniden sorar.
+// Farklıysa üstte "Güncelle" şeridi çıkar. (Ana ekrana eklenen uygulamada yenile düğmesi yok.)
+let loadedBuild = null;
+async function fetchBuild() {
+  try {
+    const r = await fetch("version.json?t=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) return null;
+    return (await r.json()).build || null;
+  } catch (e) { return null; }
+}
+async function checkUpdate(manual = false) {
+  const b = await fetchBuild();
+  if (!loadedBuild) loadedBuild = b;
+  const fresh = b && loadedBuild && b !== loadedBuild;
+  if (fresh) $("#update-bar").hidden = false;
+  if (manual) {
+    if (fresh || !b) applyUpdate();
+    else toast("Kotonoha güncel. Yine de yenileniyor…", 1500), setTimeout(applyUpdate, 800);
+  }
+}
+async function applyUpdate() {
+  store.saveNow();
+  toast("Güncelleniyor…", 2000);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  try { const r = await navigator.serviceWorker?.getRegistration(); await Promise.race([r?.update(), wait(1000)]); } catch (e) { /* */ }
+  try { for (const k of await caches.keys()) if (k.startsWith("kotonoha-app-")) await caches.delete(k); } catch (e) { /* */ }
+  location.reload();
+}
+$("#btn-update").addEventListener("click", applyUpdate);
+fetchBuild().then(b => { loadedBuild = b; });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkUpdate(); });
+setInterval(checkUpdate, 30 * 60e3);
