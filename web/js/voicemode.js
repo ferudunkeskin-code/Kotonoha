@@ -6,8 +6,9 @@
 //   waiting   cevap bekleniyor / avatar konuşuyor (mikrofon kapalı: avatarın sesini duymasın)
 //   sleeping  uykuda; yalnızca uyanma sözünü bekler, başka hiçbir şeyi göndermez
 //
-// Uyku sözü: おやすみ   ·   Uyanma sözü: ねえ、コトノハ (コトノハ demek yeterli)
-// Mikrofon Japonca dinlediği için sözler de Japonca.
+// Uyku ve uyanma sözleri dil paketinden gelir (ja: おやすみ / ねえ、コトノハ;
+// de: Gute Nacht / Hallo <ad>; en: Good night / Hey <ad>). Mikrofon hedef dili dinler.
+import { pack } from "./lang/index.js";
 
 const Rec = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 
@@ -15,14 +16,12 @@ export const DEFAULT_SILENCE_MS = 1400;   // bu kadar sessizlik olunca söylenen
 const IDLE_TO_SLEEP_MS = 3 * 60e3; // 3 dakika kimse konuşmazsa uyur
 const SLEEP_TO_OFF_MS = 5 * 60e3;  // 5 dakika uykuda kalırsa tamamen kapanır
 
-const SLEEP_WORDS = ["おやすみ", "お休み", "オヤスミ"];
-const WAKE_WORDS = ["ことのは", "コトノハ", "言の葉", "言葉", "kotonoha"];
-
 export const voiceModeAvailable = () => !!Rec;
 
-const norm = s => String(s || "").toLowerCase().replace(/[\s、。！？!?,.・「」ー〜~]/g, "");
-export const hasSleepWord = s => SLEEP_WORDS.some(w => norm(s).includes(norm(w)));
-export const hasWakeWord = s => WAKE_WORDS.some(w => norm(s).includes(norm(w)));
+const norm = s => String(s || "").toLowerCase().replace(/[\s、。！？!?,.・「」ー〜~„“”"'’]/g, "");
+const hasAny = (s, words) => words.filter(Boolean).some(w => norm(w) && norm(s).includes(norm(w)));
+export const hasSleepWord = (s, words = pack.sleepWords) => hasAny(s, words);
+export const hasWakeWord = (s, words = pack.wakeWords("")) => hasAny(s, words);
 
 // iOS bazen her sonuçta o ana kadarki metnin tamamını tekrar verir; tekrarları ayıkla.
 export function joinResults(results) {
@@ -42,6 +41,7 @@ export class VoiceMode {
    * cb.onState(state, detail)  arayüzü güncelle
    * cb.onSleep() / cb.onWake()  avatar uyur / uyanır
    * cb.onError(msg)
+   * cb.wakeWords()  uyanma sözleri (karakterin adı değişebildiği için her seferinde sorulur)
    */
   constructor(cb) {
     this.cb = cb;
@@ -98,7 +98,7 @@ export class VoiceMode {
     this._stopRec();
     this._set("sleeping");
     this.cb.onSleep?.();
-    // Uyanma sözünü dinlemeye, avatar "おやすみなさい" deyip bitirince başlanır: listenForWake()
+    // Uyanma sözünü dinlemeye, avatar iyi geceler deyip bitirince başlanır: listenForWake()
     this.offTimer = setTimeout(() => { this.stop(); this.cb.onError?.("Uzun süre uykuda kaldığı için konuşma modu kapandı."); }, SLEEP_TO_OFF_MS);
   }
 
@@ -129,7 +129,7 @@ export class VoiceMode {
   _startRec() {
     this._stopRec();
     const r = new Rec();
-    r.lang = "ja-JP";
+    r.lang = pack.locale;
     r.continuous = true;
     r.interimResults = true;
     r.maxAlternatives = 1;
@@ -139,7 +139,8 @@ export class VoiceMode {
       this.failures = 0;
       const t = joinResults(e.results);
       if (this.state === "sleeping") {
-        if (hasWakeWord(t)) { this._stopRec(); this._clearTimers(); this._set("waiting"); this.cb.onWake?.(); }
+        const words = this.cb.wakeWords ? this.cb.wakeWords() : pack.wakeWords("");
+        if (hasWakeWord(t, words)) { this._stopRec(); this._clearTimers(); this._set("waiting"); this.cb.onWake?.(); }
         return;
       }
       if (this.state !== "listening") return;

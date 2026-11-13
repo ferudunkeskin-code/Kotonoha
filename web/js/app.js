@@ -1,16 +1,21 @@
-// Kotonoha web — arayüz denetleyicisi.
+// Kotonoha web — arayüz denetleyicisi (üç dil için ortak).
+import { pack, PACKS } from "./lang/index.js";
+import { buildShell } from "./shell.js";
 import * as store from "./store.js";
 import * as tutor from "./tutor.js";
-import { TEXT_TASKS } from "./prompts.js";
+import { TEXT_TASKS, GOALS } from "./prompts.js";
 import * as furi from "./furigana.js";
 import * as speech from "./speech.js";
 import { Avatar } from "./avatar.js";
 import { LLMError, chat, cleanKey, describeKey } from "./llm.js";
 import { VoiceMode, voiceModeAvailable } from "./voicemode.js";
 
-export const APP_VERSION = "0.3.2-web";
+export const APP_VERSION = "0.4.0-web";
+const ROOT = new URL("../", import.meta.url);      // sitenin kökü (web/), dil klasöründen bağımsız
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
+
+buildShell(pack);
 
 const ui = {
   content: $("#content"), main: $("#main"), title: $("#title"), input: $("#input"),
@@ -34,8 +39,14 @@ function toast(msg, ms = 3500) {
 }
 
 const S = () => store.settings();
-const ja = text => furi.toRuby(text, S().furigana, S().furigana === "unknown" ? store.knownWords() : new Set());
+const [QA, QB] = pack.q;
+const quote = s => `${QA}${s}${QB}`;
+// Hedef dildeki metni ekrana hazırlar: Japoncada furigana, diğerlerinde düz metin.
+const tl = text => pack.furigana
+  ? furi.toRuby(text, S().furigana, S().furigana === "unknown" ? store.knownWords() : new Set())
+  : esc(text).replace(/\n/g, "<br>");
 const TOGGLE = '<button class="toggle" data-act="tr">TR</button>';
+const FLAGS = { ja: "🇯🇵", de: "🇩🇪", en: "🇬🇧" };
 
 function scrollBottom() { ui.main.scrollTop = ui.main.scrollHeight; }
 
@@ -136,14 +147,14 @@ function showHome() {
   const s = S();
   const stats = store.vocabStats();
   const level = store.get("level_estimate");
-  let html = `<h2>こんにちは${s.learner_name ? "、" + esc(s.learner_name) + "さん" : ""}！</h2>
-    <div class="muted">Ben ${esc(s.character_name)}. Bugün ne çalışalım?</div>`;
+  let html = `<h2>${esc(pack.greet(s.learner_name))}</h2>
+    <div class="muted">Ben ${esc(s.character_name)}, ${esc(pack.nameTr)} konuşma partnerin. Bugün ne çalışalım?</div>`;
   if (!store.apiKey()) html += `<div class="card warn">Başlamak için <b>⚙️ Ayarlar</b>'dan bir API anahtarı girin.
     <br><button class="btn" data-nav="settings">Ayarlara git</button></div>`;
-  if (!furi.ready()) html += `<div class="card muted">Furigana sözlüğü yükleniyor… (ilk açılışta biraz sürer)</div>`;
-  if (s.voice_on && speech.ttsAvailable() && !speech.japaneseVoices().length)
-    html += `<div class="card warn">Bu cihazda Japonca ses bulunamadı. iPad'de: Ayarlar → Erişilebilirlik →
-      Seslendirilen İçerik → Sesler → Japonca → Kyoko.</div>`;
+  if (pack.furigana && !furi.ready()) html += `<div class="card muted">Furigana sözlüğü yükleniyor… (ilk açılışta biraz sürer)</div>`;
+  if (s.voice_on && speech.ttsAvailable() && !speech.targetVoices().length)
+    html += `<div class="card warn">Bu cihazda ${esc(pack.nameTr)} ses bulunamadı. iPad'de: Ayarlar → Erişilebilirlik →
+      Seslendirilen İçerik → Sesler → ${esc(pack.nameTr)}.</div>`;
   if (store.sessionCount() === 0) html += `<div class="card">👋 İlk kez mi buradasın? Önce <b>serbest sohbet</b>
       yapalım; birkaç mesajda seviyeni anlarım.<br><button class="btn warm" data-nav="free">Sohbete başla</button></div>`;
   else html += `<div class="card">💬 <b>Serbest sohbet</b><br><button class="btn warm" data-nav="free">Sohbete başla</button></div>`;
@@ -153,44 +164,82 @@ function showHome() {
   ui.content.innerHTML = html;
 }
 
+// ================= 👤 öğrenci profili =================
+function showProfile(first = false) {
+  setMode("profile", "👤 Öğrenci profili");
+  const s = S();
+  const pr = store.profile();
+  const levels = [["", "Bilmiyorum — sohbetten anlaşılsın"], ["0", "Hiç bilmiyorum / yeni başlıyorum"],
+    ...pack.levels.map(([c, d]) => [c, `${c} — ${d}`])];
+  const lvOpts = levels.map(([v, t]) => `<option value="${v}" ${v === (pr.level_self || "") ? "selected" : ""}>${esc(t)}</option>`).join("");
+  const goals = Object.entries(GOALS).map(([k, t]) =>
+    `<label><input type="checkbox" name="goal" value="${k}" ${pr.goals?.includes(k) ? "checked" : ""}><span>${esc(t)}</span></label>`).join("");
+  ui.content.innerHTML = `<h2>${first ? "👋 Hoş geldin!" : "Öğrenci profili"}</h2>
+    <div class="muted">${first
+      ? `Burada ${esc(pack.nameTr)} konuşma pratiği yapacaksın. Önce seni biraz tanıyayım; ${esc(s.character_name)} sohbetleri buna göre ayarlar.`
+      : "Bu bilgiler avatarın seninle nasıl konuşacağını belirler."}
+      Bilgiler yalnızca bu cihazda saklanır; istediğin zaman ⚙️ Ayarlar'dan değiştirebilirsin.</div>
+    <div class="form">
+      <label>Adın</label><input type="text" id="p-name" value="${esc(s.learner_name)}" autocomplete="given-name">
+      <label>${esc(pack.nameTr)} seviyen <span class="hint">(${esc(pack.levelSystem)})</span></label>
+      <select id="p-level">${lvOpts}</select>
+      <label>Neden öğreniyorsun? <span class="hint">(birden fazla seçebilirsin)</span></label>
+      <div class="kinds goals">${goals}</div>
+      <label>Kendinden biraz bahset <span class="hint">(isteğe bağlı)</span></label>
+      <textarea id="p-about" placeholder="${esc(pack.aboutPlaceholder)}">${esc(pr.about)}</textarea>
+      <label>İlgi alanların <span class="hint">(isteğe bağlı; sohbet konuları buradan seçilir)</span></label>
+      <input type="text" id="p-interests" value="${esc(pr.interests)}" placeholder="Ör. çizim, oyunlar, futbol, tarih">
+      <button class="btn warm" data-act="profile-save">${first ? "Başlayalım →" : "Kaydet"}</button>
+    </div>`;
+}
+
+function saveProfile() {
+  const goals = [...document.querySelectorAll('input[name="goal"]:checked')].map(i => i.value);
+  store.setSetting("learner_name", $("#p-name").value.trim());
+  store.setSetting("profile", {
+    level_self: $("#p-level").value, goals,
+    about: $("#p-about").value.trim().slice(0, 600), interests: $("#p-interests").value.trim().slice(0, 300),
+  });
+  store.setSetting("profile_done", true);
+  store.saveNow();
+  toast("Profil kaydedildi.");
+  showHome();
+}
+
 // ================= serbest sohbet =================
-const FREE_HEADER = `<h2>自由会話 · Serbest sohbet</h2><div class="muted">İstediğin konuda yaz.
+const freeHeader = () => `<h2>${esc(pack.titles.free)} · Serbest sohbet</h2><div class="muted">İstediğin konuda yaz.
     Hatalarını en fazla birer birer düzeltirim; yeni kelimeler tekrar listene eklenir.</div>`;
 
 function startFree() {
   setMode("free", "💬 Serbest sohbet");
-  setInput(true, "Japonca yaz… (Türkçe soru da sorabilirsin)");
+  setInput(true, `${pack.nameTr} yaz… (Türkçe soru da sorabilirsin)`);
   state.sessionId = store.newSession("free");
-  state.header = () => FREE_HEADER;
+  state.header = freeHeader;
   state.task = null;
   renderChat();
   ask("");
 }
 
 // ================= 📄 metinle çalış =================
-const KINDS = {
-  exam: ["🎓 Sözlü sınav provası", "Kotonoha öğretmen olur; metinle ilgili sorular sorar, cevaplarını değerlendirir, sonunda genel bir değerlendirme yapar."],
+const KINDS = () => ({
+  exam: ["🎓 Sözlü sınav provası", `${S().character_name} öğretmen olur; metinle ilgili sorular sorar, cevaplarını değerlendirir, sonunda genel bir değerlendirme yapar.`],
   talk: ["💬 Metin hakkında sohbet", "Metnin konusunu doğal bir sohbette konuşursunuz; metindeki kelime ve kalıpları kullanmaya teşvik eder."],
   read: ["📖 Sesli okuma", "Metni yüksek sesle okursun (🎤 ya da 🎧 ile); takıldığın ya da yanlış okuduğun yerleri söyler."],
-};
+});
 const MAX_TEXT = 6000;
-
-function splitSentences(text) {
-  return text.split(/(?<=[。！？!?])|\n+/).map(s => s.trim()).filter(Boolean);
-}
 
 function showTextSetup() {
   setMode("text", "📄 Metinle çalış");
   const saved = store.get("study_text", "");
   const kind = store.get("study_kind", "exam");
-  const radios = Object.entries(KINDS).map(([k, [t, d]]) =>
-    `<label><input type="radio" name="kind" value="${k}" ${k === kind ? "checked" : ""}><span><b>${t}</b><br><span class="muted">${d}</span></span></label>`).join("");
-  ui.content.innerHTML = `<h2>テキスト練習 · Metinle çalış</h2>
-    <div class="muted">Çalışmak istediğin Japonca metni aşağıya yapıştır (sınav metni, ders metni, konuşma konusu…).
+  const radios = Object.entries(KINDS()).map(([k, [t, d]]) =>
+    `<label><input type="radio" name="kind" value="${k}" ${k === kind ? "checked" : ""}><span><b>${t}</b><br><span class="muted">${esc(d)}</span></span></label>`).join("");
+  ui.content.innerHTML = `<h2>${esc(pack.titles.text)} · Metinle çalış</h2>
+    <div class="muted">Çalışmak istediğin ${esc(pack.nameTr)} metni aşağıya yapıştır (sınav metni, ders metni, konuşma konusu…).
     Metin yalnızca bu cihazda saklanır.</div>
     <div class="form">
       <label>Metin</label>
-      <textarea id="t-text" style="min-height:180px" placeholder="ここにテキストを貼り付けてください">${esc(saved)}</textarea>
+      <textarea id="t-text" style="min-height:180px" placeholder="${esc(pack.textPlaceholder)}">${esc(saved)}</textarea>
       <div class="hint"><span id="t-count">${saved.length}</span> / ${MAX_TEXT} karakter</div>
       <label>Nasıl çalışalım?</label>
       <div class="kinds">${radios}</div>
@@ -209,14 +258,15 @@ function startTextFromForm() {
 function startText(text, kind) {
   store.set("study_text", text);
   store.set("study_kind", kind);
-  setMode("text", "📄 " + KINDS[kind][0].slice(2).trim());
+  const kinds = KINDS();
+  setMode("text", "📄 " + kinds[kind][0].slice(2).trim());
   setInput(true, kind === "read" ? "🎤 ya da 🎧 ile metni oku… (yazabilirsin de)" : "Cevabını yaz ya da 🎧 ile konuş…");
   state.sessionId = store.newSession("text:" + kind);
   state.task = TEXT_TASKS[kind](text);
-  const sents = splitSentences(text).map(s => ({ s, i: addSpeak(s) }));
-  state.header = () => `<h2>${KINDS[kind][0]}</h2>
+  const sents = pack.splitSentences(text).map(s => ({ s, i: addSpeak(s) }));
+  state.header = () => `<h2>${kinds[kind][0]}</h2>
     <details class="card text-card" ${kind === "read" ? "open" : ""}><summary>📄 Metin (${sents.length} cümle) · 🔊 ile dinle</summary>
-      ${sents.map(({ s, i }) => `<div class="sent"><span class="ja">${ja(s)}</span><button class="icon" data-act="say" data-i="${i}">🔊</button></div>`).join("")}
+      ${sents.map(({ s, i }) => `<div class="sent"><span class="tl">${tl(s)}</span><button class="icon" data-act="say" data-i="${i}">🔊</button></div>`).join("")}
       <button class="btn alt" data-nav="text">✏️ Metni değiştir</button>
     </details>`;
   renderChat();
@@ -224,7 +274,7 @@ function startText(text, kind) {
 }
 
 function renderChat() {
-  let html = (state.header || (() => FREE_HEADER))();
+  let html = (state.header || freeHeader)();
   for (const item of state.chat) html += item.type === "user" ? userMsg(item.text, item.spoken) : aiMsg(item.data, item.speak);
   ui.content.innerHTML = html;
   if (state.busy) setBusy(true);
@@ -235,17 +285,22 @@ function userMsg(text, spoken = false) {
   return `<div class="msg me"><div class="b">${esc(text).replace(/\n/g, "<br>")}${spoken ? '<span class="via">🎧</span>' : ""}</div></div>`;
 }
 
+function wordPill(w) {
+  const [p1, p2] = pack.paren;
+  const rd = w.reading ? `${p1}${esc(w.reading)}${p2}` : "";
+  return `<span class="pill">${esc(w.word)}${rd} ${esc(w.meaning_tr)}</span>`;
+}
+
 function aiMsg(d, si) {
   const final = d.goal_reached && state.mode === "text";   // sınav provasının son değerlendirmesi: hep açık
   const tr = d.reply_tr ? `${TOGGLE}<div class="tr${final ? " open" : ""}">${esc(d.reply_tr)}</div>` : "";
   let fix = "";
   const c = d.correction;
-  if (c) fix = `<div class="fix">✏️ 「${esc(c.original)}」 → <b>「${ja(c.corrected)}」</b><br>${esc(c.explanation_tr)}</div>`;
+  if (c) fix = `<div class="fix">✏️ ${quote(esc(c.original))} → <b>${quote(tl(c.corrected))}</b><br>${esc(c.explanation_tr)}</div>`;
   let words = "";
   const nw = (d.new_words || []).filter(w => w && typeof w === "object");
-  if (nw.length) words = `<div class="muted" style="margin-top:6px">Yeni: ` + nw.map(w =>
-    `<span class="pill">${esc(w.word)}（${esc(w.reading)}） ${esc(w.meaning_tr)}</span>`).join(" ") + "</div>";
-  return `<div class="msg ai"><div class="b"><span class="ja">${ja(d.reply_ja)}</span>
+  if (nw.length) words = `<div class="muted" style="margin-top:6px">Yeni: ` + nw.map(wordPill).join(" ") + "</div>";
+  return `<div class="msg ai"><div class="b"><span class="tl">${tl(d.reply)}</span>
     <button class="icon" data-act="say" data-i="${si}" title="Seslendir">🔊</button>${tr}${fix}${words}
     ${final ? '<div><button class="btn warm" data-act="text-again">🔁 Yeniden prova</button><button class="btn alt" data-nav="text">✏️ Başka metin</button></div>' : ""}</div></div>`;
 }
@@ -271,17 +326,18 @@ function ask(text) {
 
 function onReply(d) {
   setBusy(false);
-  const si = addSpeak(d.reply_ja);
+  const si = addSpeak(d.reply);
   state.chat.push({ type: "ai", data: d, speak: si });
   ui.content.insertAdjacentHTML("beforeend", aiMsg(d, si));
   scrollBottom();
-  speakText(d.reply_ja, si, guard(() => vm.resume()));
+  speakText(d.reply, si, guard(() => vm.resume()));
 }
 
 // ================= 🎧 konuşma modu =================
-const STATE_LABEL = {
-  listening: "🎧 Dinliyorum…", waiting: "💭", sleeping: "💤 Uykuda — uyandırmak için 「ねえ、コトノハ」",
-};
+const stateLabel = st => ({
+  listening: "🎧 Dinliyorum…", waiting: "💭",
+  sleeping: `💤 Uykuda — uyandırmak için ${pack.wakeHint(S().character_name)}`,
+}[st] || "");
 const vm = new VoiceMode({
   onUtterance: text => {
     state.chat.push({ type: "user", text, spoken: true });
@@ -294,20 +350,21 @@ const vm = new VoiceMode({
     ui.vbar.className = st;
     ui.voice.classList.toggle("on", st !== "off");
     ui.mic.disabled = st !== "off" || ui.input.disabled;
-    ui.vstate.textContent = STATE_LABEL[st] || "";
+    ui.vstate.textContent = stateLabel(st);
     ui.vtext.textContent = st === "listening" ? detail : st === "waiting" ? (state.busy ? "düşünüyor…" : "konuşuyor…") : "";
     if (st === "off") avatar.setSleeping(false);
   },
   onSleep: () => {
     speech.stop();
     avatar.setSleeping(false);
-    speakText("おやすみなさい。またね！", -1, () => { avatar.setSleeping(true); vm.listenForWake(); });
+    speakText(pack.sayGoodnight, -1, () => { avatar.setSleeping(true); vm.listenForWake(); });
   },
   onWake: () => {
     avatar.setSleeping(false);
-    speakText("はい！おかえりなさい。", -1, () => vm.resume());
+    speakText(pack.sayWelcome, -1, () => vm.resume());
   },
   onError: msg => toast(msg, 6000),
+  wakeWords: () => pack.wakeWords(S().character_name),
 });
 
 // ---- hız ve sıra geçme süresi: anında kaydedilir, bir sonraki açılışta hatırlanır ----
@@ -353,7 +410,7 @@ function toggleVoice() {
   showVoiceSettings();
   vm.start();
   if (state.busy) vm.pause();     // cevap bekleniyorsa, cevaptan sonra dinlemeye başlar
-  toast("🎧 Konuşma modu açık. Konuş; kısa bir sessizlikten sonra kendiliğinden gönderilir. Uyutmak için 「おやすみ」.", 7000);
+  toast(`🎧 Konuşma modu açık. Konuş; kısa bir sessizlikten sonra kendiliğinden gönderilir. Uyutmak için ${pack.sleepHint}.`, 7000);
 }
 
 // ================= mikrofon =================
@@ -389,10 +446,10 @@ function showProgress() {
   setMode("progress", "📈 İlerleme");
   const st = store.vocabStats();
   const mist = store.mistakeStats(8).map(m =>
-    `<tr><td>${esc(m.category)}</td><td>${m.count}</td><td>「${esc(m.original)}」→「${esc(m.corrected)}」</td></tr>`).join("");
+    `<tr><td>${esc(m.category)}</td><td>${m.count}</td><td>${quote(esc(m.original))}→${quote(esc(m.corrected))}</td></tr>`).join("");
   const facts = store.facts(20).map(f => `<span class="pill">${esc(f)}</span>`).join("");
   const sums = store.recentSummaries(6).map(s => `<li>${esc(s)}</li>`).join("");
-  ui.content.innerHTML = `<h2>İlerleme</h2>
+  ui.content.innerHTML = `<h2>İlerleme · ${esc(pack.nameTr)}</h2>
     ${state.summarizing ? '<div class="card muted">⏳ Son sohbetin özeti çıkarılıyor; bu sayfa birazdan kendini yenileyecek.</div>' : ""}
     <div class="card"><b>Tahmini seviye:</b> ${esc(store.get("level_estimate") || "henüz belli değil")}</div>
     <div class="card"><b>Kelimeler</b><br>Toplam ${st.total} · İyi bilinen ${st.known} · Tekrar bekleyen ${st.due}</div>
@@ -403,12 +460,20 @@ function showProgress() {
 }
 
 // ================= ayarlar =================
+function langLink(code) {
+  const p = PACKS[code];
+  const href = new URL(code === "ja" ? "./" : `${code}/`, ROOT).href;
+  return `<a class="btn alt" href="${href}">${FLAGS[code] || ""} ${esc(p.nameTr)}</a>`;
+}
+
 function showSettings() {
   setMode("settings", "⚙️ Ayarlar");
   const s = S();
-  const voices = speech.japaneseVoices();
-  const vopts = [`<option value="">Otomatik (Kyoko → O-ren)</option>`]
+  const pr = store.profile();
+  const voices = speech.targetVoices();
+  const vopts = [`<option value="">${esc(pack.voiceAutoLabel)}</option>`]
     .concat(voices.map(v => `<option ${v === s.voice_name ? "selected" : ""}>${esc(v)}</option>`)).join("");
+  const others = Object.keys(PACKS).filter(c => c !== pack.code).map(langLink).join("");
   ui.content.innerHTML = `<h2>Ayarlar</h2><div class="form">
   <div class="card"><b>Yapay zekâ</b>
     <label>Kullanılacak</label>
@@ -420,12 +485,18 @@ function showSettings() {
     <label>OpenAI modeli</label><input type="text" id="f-omodel" value="${esc(s.openai_model)}" autocapitalize="off">
     <button class="btn alt" data-act="test-key">🔌 Bağlantıyı dene</button>
     <div id="f-keytest" class="hint"></div>
-    <div class="hint">Anahtarlar yalnızca bu cihazda saklanır; yedek dosyasına da girmez.</div>
+    <div class="hint">Anahtarlar yalnızca bu cihazda saklanır; yedek dosyasına da girmez. Aynı tarayıcıdaki
+      diğer dil sürümleri de bu anahtarı kullanır.</div>
   </div>
-  <div class="card"><b>Karakter ve öğrenci</b>
+  <div class="card"><b>Öğrenci</b>
+    <div>${esc(s.learner_name || "Adın girilmemiş")}${pr.level_self ? " · seviye: " + esc(pr.level_self === "0" ? "yeni başlıyor" : pr.level_self) : ""}</div>
+    <div class="hint">${esc([pr.about, pr.interests].filter(Boolean).join(" · ") || "Profil boş.")}</div>
+    <button class="btn alt" data-act="profile">👤 Profili düzenle</button>
+  </div>
+  <div class="card"><b>Karakter</b>
     <label>Avatarın adı</label><input type="text" id="f-name" value="${esc(s.character_name)}">
+    <div class="hint">🎧 Konuşma modunda avatarı uyandırmak için bu adı söylersin: ${esc(pack.wakeHint(s.character_name))}</div>
     <label>Karakteri</label><textarea id="f-persona">${esc(s.persona)}</textarea>
-    <label>Öğrencinin adı</label><input type="text" id="f-learner" value="${esc(s.learner_name)}">
   </div>
   <div class="card"><b>Ses</b>
     <label class="row"><input type="checkbox" id="f-voice" ${s.voice_on ? "checked" : ""}> Avatar sesli konuşsun</label>
@@ -437,16 +508,21 @@ function showSettings() {
     <div class="hint">Sustuktan kaç saniye sonra söylediğin gönderilsin. Kısa: hızlı karşılıklı konuşma; uzun: düşünmek için zaman. Varsayılan 1.4 sn.
       Hız ve süre değiştirdiğin anda kaydedilir; konuşma modundaki ⏱ ve 🗣 düğmeleriyle de ayarlanabilir.</div>
     <button class="btn alt" data-act="test-voice">▶ Dene</button>
-    ${voices.length ? "" : '<div class="hint">Japonca ses bulunamadı. iPad: Ayarlar → Erişilebilirlik → Seslendirilen İçerik → Sesler → Japonca.</div>'}
+    ${voices.length ? "" : `<div class="hint">${esc(pack.nameTr)} ses bulunamadı. iPad: Ayarlar → Erişilebilirlik → Seslendirilen İçerik → Sesler → ${esc(pack.nameTr)}.</div>`}
   </div>
   <div class="card"><b>Yedekleme</b>
-    <div class="hint">Hafıza ve kelime ilerlemesi yalnızca bu cihazda durur. Ara sıra yedek alın.</div>
+    <div class="hint">Hafıza ve kelime ilerlemesi yalnızca bu cihazda durur. Ara sıra yedek alın.
+      Her dilin yedeği ayrıdır.</div>
     <button class="btn alt" data-act="export">⬇ Yedeği indir</button>
     <label class="btn alt" style="margin-top:6px">⬆ Yedekten geri yükle<input type="file" id="f-import" accept=".json,application/json" hidden></label>
   </div>
   <button class="btn warm" data-act="save-settings">Kaydet</button>
+  <div class="card"><b>Diğer diller</b>
+    <div class="hint">Her dilin kendi simgesi ve ayrı hafızası var. iPad'de açınca Paylaş → Ana Ekrana Ekle ile ayrı simge olarak eklenir.</div>
+    ${others}
+  </div>
   <div class="card"><b>Güncelleme</b>
-    <div class="muted">Kotonoha ${APP_VERSION}${loadedBuild ? " · yapı " + esc(loadedBuild) : ""}</div>
+    <div class="muted">${esc(pack.appName)} ${APP_VERSION}${loadedBuild ? " · yapı " + esc(loadedBuild) : ""}</div>
     <button class="btn alt" data-act="update-check">🔄 Güncellemeyi denetle ve yenile</button>
   </div></div>`;
   $("#f-provider").value = s.provider;
@@ -464,7 +540,7 @@ function readSettingsForm() {
     provider: $("#f-provider").value,
     claude_key: cleanKey(v("#f-ckey")), claude_model: v("#f-cmodel") || "claude-sonnet-5-5",
     openai_key: cleanKey(v("#f-okey")), openai_model: v("#f-omodel") || "gpt-4o",
-    character_name: v("#f-name") || "Kotonoha", persona: v("#f-persona"), learner_name: v("#f-learner"),
+    character_name: v("#f-name") || pack.defaultCharacter, persona: v("#f-persona"),
     voice_on: $("#f-voice").checked, voice_name: $("#f-vname").value, rate: Number($("#f-rate").value),
     silence_ms: Math.round(Number($("#f-wait").value) * 1000),
   };
@@ -486,7 +562,7 @@ async function testKey() {
   const key = f.provider === "openai" ? f.openai_key : f.claude_key;
   out.textContent = `Deneniyor… anahtar: ${describeKey(key)}`;
   try {
-    const reply = await chat({ ...S(), ...f }, "Kısa cevap ver.", [{ role: "user", content: "「はい」とだけ答えて" }], 20);
+    const reply = await chat({ ...S(), ...f }, "Kısa cevap ver.", [{ role: "user", content: "Sadece \"OK\" yaz." }], 20);
     out.innerHTML = `✅ Bağlantı çalışıyor. Cevap: ${esc(reply)} — şimdi <b>Kaydet</b>'e basın.`;
   } catch (e) {
     out.textContent = `❌ ${e.message}  ·  Anahtar: ${describeKey(key)}`;
@@ -495,7 +571,7 @@ async function testKey() {
 
 function testVoice() {
   const f = readSettingsForm();
-  speech.speak(`こんにちは。わたしは${f.character_name === "Kotonoha" ? "コトノハ" : f.character_name}です。よろしくお願いします。`, {
+  speech.speak(pack.testPhrase(f.character_name), {
     voiceName: f.voice_name, rate: f.rate, silent: !f.voice_on, onMouth: m => avatar.setMouth(m),
   });
 }
@@ -504,7 +580,7 @@ function exportBackup() {
   const blob = new Blob([store.exportJSON()], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `kotonoha-yedek-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `kotonoha-${pack.code}-yedek-${new Date().toISOString().slice(0, 10)}.json`;
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
@@ -513,7 +589,7 @@ function exportBackup() {
 function importBackup(e) {
   const file = e.target.files?.[0];
   if (!file) return;
-  if (!confirm("Bu cihazdaki hafıza, yedekteki ile değiştirilsin mi?")) return;
+  if (!confirm(`Bu cihazdaki ${pack.nameTr} hafızası, yedekteki ile değiştirilsin mi?`)) return;
   file.text().then(t => {
     store.importJSON(t);
     applySettings();
@@ -527,7 +603,7 @@ function applySettings() {
   ui.name.textContent = s.character_name;
   ui.tr.checked = !!s.show_tr;
   document.body.classList.toggle("show-tr", !!s.show_tr);
-  ui.furi.value = s.furigana;
+  if (ui.furi) ui.furi.value = s.furigana;
 }
 
 // ================= olaylar =================
@@ -545,6 +621,8 @@ ui.content.addEventListener("click", e => {
   else if (act === "text-start") startTextFromForm();
   else if (act === "text-again") startText(store.get("study_text", ""), store.get("study_kind", "exam"));
   else if (act === "export") exportBackup();
+  else if (act === "profile") showProfile(false);
+  else if (act === "profile-save") saveProfile();
 });
 
 function go(nav) {
@@ -573,7 +651,7 @@ ui.tr.addEventListener("change", () => {
   store.setSetting("show_tr", ui.tr.checked);
   document.body.classList.toggle("show-tr", ui.tr.checked);
 });
-ui.furi.addEventListener("change", () => {
+ui.furi?.addEventListener("change", () => {
   store.setSetting("furigana", ui.furi.value);
   if (state.mode === "free" || (state.mode === "text" && state.sessionId)) renderChat();
 });
@@ -583,16 +661,18 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) store
 
 // ================= başlangıç =================
 applySettings();
-showHome();
+if (S().profile_done) showHome(); else showProfile(true);
 store.requestPersist();
-furi.init().then(t => {
-  if (state.mode === "home") showHome();
-  else if (state.mode === "free") renderChat();
-  if (!t) toast("Furigana sözlüğü yüklenemedi; metinler furiganasız gösterilecek.", 6000);
-});
+if (pack.furigana) {
+  furi.init().then(t => {
+    if (state.mode === "home") showHome();
+    else if (state.mode === "free" || (state.mode === "text" && state.sessionId)) renderChat();
+    if (!t) toast("Furigana sözlüğü yüklenemedi; metinler furiganasız gösterilecek.", 6000);
+  });
+}
 catchUpSummaries();
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js").then(r => r.update()).catch(() => {});
+  navigator.serviceWorker.register(new URL("sw.js", ROOT)).then(r => r.update()).catch(() => {});
 }
 
 // ================= güncelleme =================
@@ -602,7 +682,7 @@ if ("serviceWorker" in navigator) {
 let loadedBuild = null;
 async function fetchBuild() {
   try {
-    const r = await fetch("version.json?t=" + Date.now(), { cache: "no-store" });
+    const r = await fetch(new URL("version.json?t=" + Date.now(), ROOT), { cache: "no-store" });
     if (!r.ok) return null;
     return (await r.json()).build || null;
   } catch (e) { return null; }
@@ -614,7 +694,7 @@ async function checkUpdate(manual = false) {
   if (fresh) $("#update-bar").hidden = false;
   if (manual) {
     if (fresh || !b) applyUpdate();
-    else toast("Kotonoha güncel. Yine de yenileniyor…", 1500), setTimeout(applyUpdate, 800);
+    else toast("Güncel. Yine de yenileniyor…", 1500), setTimeout(applyUpdate, 800);
   }
 }
 async function applyUpdate() {

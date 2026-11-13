@@ -1,46 +1,13 @@
-// Ses: iPad'in kendi Japonca sesleri (Kyoko, O-ren) ve konuşma tanıma.
-// VOICEVOX'taki gibi hece zamanları bilinmediği için ağız, okunuştaki hecelere göre
-// hareket eder; konuşma hızı her cümleden sonra ölçülüp kendini ayarlar.
-import { readingOf, kataToHira } from "./furigana.js";
-
-// ---------------- hece → ağız şekli ----------------
-const VOWEL = {};
-for (const [v, chars] of Object.entries({
-  a: "あかさたなはまやらわがざだばぱぁ", i: "いきしちにひみりぎじぢびぴぃ",
-  u: "うくすつぬふむゆるぐずづぶぷぅゔ", e: "えけせてねへめれげぜでべぺぇ",
-  o: "おこそとのほもよろをごぞどぼぽぉ",
-})) for (const c of chars) VOWEL[c] = v;
-const SMALL_Y = { "ゃ": "a", "ゅ": "u", "ょ": "o" };
-const PAUSE = "、。！？!?…・「」『』（）() 　\n,.";
-const KANJI_RE = /[㐀-鿿々]/;
-
-// [{m: ağız, w: ağırlık}] — w: hece=1, duraklama=2
-export function moraSequence(text) {
-  const read = kataToHira(readingOf(text));
-  const seq = [];
-  let i = 0;
-  for (const c of read) {
-    if (PAUSE.includes(c)) { if (seq.length && seq[seq.length - 1].m !== "closed") seq.push({ m: "closed", w: 2 }); continue; }
-    if (c in SMALL_Y) { if (seq.length) seq[seq.length - 1].m = SMALL_Y[c]; continue; }
-    if (c === "っ") { seq.push({ m: "closed", w: 1 }); continue; }
-    if (c === "ん") { seq.push({ m: "n", w: 1 }); continue; }
-    if (c === "ー") { seq.push({ m: seq.length ? seq[seq.length - 1].m : "a", w: 1 }); continue; }
-    if (c in VOWEL) { seq.push({ m: VOWEL[c], w: 1 }); continue; }
-    if (KANJI_RE.test(c)) {           // sözlük yoksa: kanji ≈ 2 hece
-      seq.push({ m: "aoeiu"[i++ % 5], w: 1 }, { m: "aoeiu"[i++ % 5], w: 1 }); continue;
-    }
-    // Latin harfler vb.: yaklaşık
-    if (/[a-z]/i.test(c)) { if (/[aeiou]/i.test(c)) seq.push({ m: c.toLowerCase(), w: 1 }); continue; }
-  }
-  while (seq.length && seq[seq.length - 1].m === "closed") seq.pop();
-  return seq;
-}
+// Ses: cihazın kendi sesleri (iPad: Kyoko, Anna, Samantha…) ve konuşma tanıma.
+// Hece zamanları bilinmediği için ağız, dil paketinin verdiği hece dizisine göre hareket eder;
+// konuşma hızı her cümleden sonra ölçülüp kendini ayarlar.
+import { pack } from "./lang/index.js";
 
 // Ağırlıkları zamana çevir: [{start, end, m}]
-export function timeline(seq, secPerMora) {
+export function timeline(seq, secPerUnit) {
   let t = 0;
   return seq.map(s => {
-    const d = s.w * secPerMora;
+    const d = s.w * secPerUnit;
     const r = { start: t, end: t + d, m: s.m };
     t += d;
     return r;
@@ -57,12 +24,14 @@ const synth = typeof window !== "undefined" ? window.speechSynthesis : null;
 let voices = [];
 let unlocked = false;
 let justCancelled = false;
-let current = null;            // {utter, raf, onEnd}
-let secPerMora = 0.135;        // iPad Kyoko ~ hız 1.0 için başlangıç tahmini; ölçtükçe düzelir
+let current = null;                  // {utter, raf, onEnd}
+let secPerUnit = pack.secPerUnit;    // başlangıç tahmini; ölçtükçe düzelir
+
+const langOf = v => (v.lang || "").toLowerCase().replace("_", "-");
 
 function loadVoices() {
   if (!synth) return;
-  voices = synth.getVoices().filter(v => (v.lang || "").toLowerCase().replace("_", "-").startsWith("ja"));
+  voices = synth.getVoices().filter(v => langOf(v).startsWith(pack.code));
 }
 if (synth) {
   loadVoices();
@@ -70,13 +39,13 @@ if (synth) {
 }
 
 export const ttsAvailable = () => !!synth;
-export function japaneseVoices() { loadVoices(); return voices.map(v => v.name); }
+export function targetVoices() { loadVoices(); return voices.map(v => v.name); }
 
 function pickVoice(name) {
   loadVoices();
   return voices.find(v => v.name === name)
-    || voices.find(v => /kyoko/i.test(v.name))
-    || voices.find(v => /o-?ren/i.test(v.name))
+    || pack.voicePrefs.map(re => voices.find(v => re.test(v.name))).find(Boolean)
+    || voices.find(v => langOf(v) === pack.locale.toLowerCase())
     || voices[0] || null;
 }
 
@@ -84,8 +53,8 @@ function pickVoice(name) {
 export function unlock() {
   if (unlocked || !synth) return;
   unlocked = true;
-  // iPad: ilk konuşma bir dokunuşun içinde başlamalı; sessiz, kısa bir Japonca hece söyletiyoruz.
-  try { const u = new SpeechSynthesisUtterance("あ"); u.lang = "ja-JP"; u.volume = 0; u.rate = 2; synth.speak(u); }
+  // Sessiz, kısa bir hece söyletiyoruz.
+  try { const u = new SpeechSynthesisUtterance("a"); u.lang = pack.locale; u.volume = 0; u.rate = 2; synth.speak(u); }
   catch (e) { /* */ }
 }
 
@@ -96,14 +65,14 @@ export function stop() {
 
 /**
  * Metni seslendirir.  onMouth(şekil) her karede çağrılır, onEnd() bitince.
- * Ses kapalıysa ya da Japonca ses yoksa yalnızca ağız hareket eder.
+ * Ses kapalıysa ya da o dilde ses yoksa yalnızca ağız hareket eder.
  */
 export function speak(text, { voiceName = "", rate = 0.9, silent = false, onMouth = () => {}, onEnd = () => {} } = {}) {
   stop();
-  const seq = moraSequence(text);
-  const moraCount = seq.reduce((a, s) => a + s.w, 0) || 1;
+  const seq = pack.mouthSequence(text);
+  const units = seq.reduce((a, s) => a + s.w, 0) || 1;
   const voice = silent ? null : pickVoice(voiceName);
-  const spm = () => secPerMora / rate;
+  const spu = () => secPerUnit / rate;
   const job = { raf: 0, onEnd: () => { onMouth("closed"); onEnd(); }, start: 0 };
   current = job;
 
@@ -115,7 +84,7 @@ export function speak(text, { voiceName = "", rate = 0.9, silent = false, onMout
     if (!voice && t > (tl.length ? tl[tl.length - 1].end : 0)) { finish(); return; }
     job.raf = requestAnimationFrame(animate);
   };
-  const begin = () => { job.start = performance.now(); job.tl = timeline(seq, spm()); animate(); };
+  const begin = () => { job.start = performance.now(); job.tl = timeline(seq, spu()); animate(); };
   const finish = () => {
     if (current !== job) return;
     cancelAnimationFrame(job.raf);
@@ -126,19 +95,19 @@ export function speak(text, { voiceName = "", rate = 0.9, silent = false, onMout
   if (silent || !synth) { begin(); return; }
 
   // iPad, ana ekrana eklenmiş uygulamada ses listesini bazen boş verir. O zaman ses
-  // nesnesi seçmeden yalnızca dili "ja-JP" yapıyoruz; iPad kendi Japonca sesini kullanır.
+  // nesnesi seçmeden yalnızca dili veriyoruz; iPad o dildeki kendi sesini kullanır.
   const u = new SpeechSynthesisUtterance(text);
   if (voice) u.voice = voice;
-  u.lang = voice?.lang || "ja-JP";
+  u.lang = voice?.lang || pack.locale;
   u.rate = rate;
   u.onstart = () => { if (current === job) begin(); };
   u.onend = () => {
     if (current !== job) return;
     // gerçek süreye göre hece süresini ayarla (bir sonraki cümle daha uyumlu olsun)
     const dur = (performance.now() - job.start) / 1000;
-    if (job.start && moraCount > 3) {
-      const measured = (dur * rate) / moraCount;
-      if (measured > 0.05 && measured < 0.4) secPerMora = 0.7 * secPerMora + 0.3 * measured;
+    if (job.start && units > 3) {
+      const measured = (dur * rate) / units;
+      if (measured > 0.05 && measured < 0.5) secPerUnit = 0.7 * secPerUnit + 0.3 * measured;
     }
     finish();
   };
@@ -151,15 +120,6 @@ export function speak(text, { voiceName = "", rate = 0.9, silent = false, onMout
   setTimeout(() => { if (current === job && !job.start) begin(); }, 600);
 }
 
-export function speakMany(texts, opts) {
-  const list = [...texts];
-  const next = cancelled => {
-    if (cancelled || !list.length) { opts.onAllEnd?.(); return; }
-    speak(list.shift(), { ...opts, onEnd: () => setTimeout(() => next(false), 250) });
-  };
-  next(false);
-}
-
 // ---------------- konuşma tanıma (mikrofon) ----------------
 const Rec = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 export const sttAvailable = () => !!Rec;
@@ -169,7 +129,7 @@ export function listen({ onText = () => {}, onEnd = () => {}, onError = () => {}
   if (!Rec) { onError("Bu tarayıcı konuşma tanımayı desteklemiyor."); return () => {}; }
   stop();
   const r = new Rec();
-  r.lang = "ja-JP";
+  r.lang = pack.locale;
   r.interimResults = true;
   r.continuous = true;
   r.maxAlternatives = 1;

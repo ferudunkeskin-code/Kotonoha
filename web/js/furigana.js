@@ -1,8 +1,9 @@
-// Furigana: kuromoji (tarayıcıda çalışan Japonca sözlük) ile cihazın içinde üretilir.
-// Sözlük ilk açılışta bir kez indirilir (~12 MB), sonra önbellekte kalır.
+// Furigana (yalnızca Japonca sürüm): kuromoji (tarayıcıda çalışan Japonca sözlük) ile cihazın içinde üretilir.
+// Kütüphane ve sözlük yalnızca Japonca sürümde, ilk açılışta bir kez indirilir (~12 MB), sonra önbellekte kalır.
 
+const KUROMOJI_JS = "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js";
 const DIC = "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/";
-const KANJI = "㐀-䶿一-鿿々ヶ豈-﫿";
+const KANJI = "㐀-䶿一-鿿々ヶ豈-﫿";
 const KANJI_RE = new RegExp(`[${KANJI}]`);
 const RUN_RE = new RegExp(`([${KANJI}]+)|([^${KANJI}]+)`, "g");
 
@@ -19,16 +20,30 @@ if (typeof XMLHttpRequest !== "undefined") {
   };
 }
 
+function loadScript(src) {
+  return new Promise(resolve => {
+    if (window.kuromoji) { resolve(true); return; }
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = () => resolve(!!window.kuromoji);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+}
+
 export function init() {
   if (loading) return loading;
-  loading = new Promise(resolve => {
-    if (typeof window === "undefined" || !window.kuromoji) { resolve(null); return; }
-    window.kuromoji.builder({ dicPath: "kdict/" }).build((err, t) => {
-      if (err) console.warn("furigana sözlüğü yüklenemedi", err);
-      tokenizer = err ? null : t;
-      resolve(tokenizer);
+  loading = (async () => {
+    if (typeof window === "undefined") return null;
+    if (!(await loadScript(KUROMOJI_JS))) return null;
+    return new Promise(resolve => {
+      window.kuromoji.builder({ dicPath: "kdict/" }).build((err, t) => {
+        if (err) console.warn("furigana sözlüğü yüklenemedi", err);
+        tokenizer = err ? null : t;
+        resolve(tokenizer);
+      });
     });
-  });
+  })();
   return loading;
 }
 

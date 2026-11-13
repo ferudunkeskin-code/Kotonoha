@@ -1,43 +1,114 @@
 // Kotonoha hafızası — tarayıcının kendi deposunda (localStorage), yalnızca bu cihazda.
-// Masaüstündeki SQLite veritabanının karşılığı: oturumlar, mesajlar, öğrenci bilgileri,
-// hatalar, kelimeler (SRS), ünite içeriği ve ilerleme.
+// Her dilin hafızası ayrıdır: "kotonoha-v1-ja", "kotonoha-v1-de", "kotonoha-v1-en".
+// API anahtarları ve yapay zekâ seçimi dillerin ORTAK deposunda durur ("kotonoha-shared"):
+// aynı tarayıcıda bir kez girmek yeter. (iPad'de ana ekrana eklenen her uygulamanın deposu
+// ayrı olduğu için orada her simgede bir kez girilir.)
+import { pack } from "./lang/index.js";
 
-const KEY = "kotonoha-v1";
+export const LEGACY_KEY = "kotonoha-v1";            // 0.3.x: tek dil (Japonca) dönemi
+export const KEY = `kotonoha-v1-${pack.code}`;
+export const SHARED_KEY = "kotonoha-shared";
 
-export const DEFAULT_SETTINGS = {
+export const DEFAULT_SHARED = {
   provider: "claude",
   claude_key: "", claude_model: "claude-sonnet-5-5",
   openai_key: "", openai_model: "gpt-4o",
-  character_name: "Kotonoha",
-  persona: "Sakin, meraklı ve biraz esprili. Çizime, edebiyata ve oyunlara ilgi duyar. " +
-           "Hata yapmaktan korkmamayı öğütler.",
+};
+const SHARED_FIELDS = Object.keys(DEFAULT_SHARED);
+
+export const blankProfile = () => ({ level_self: "", goals: [], about: "", interests: "" });
+
+export const DEFAULT_SETTINGS = {
+  character_name: pack.defaultCharacter,
+  persona: "Sakin, meraklı ve biraz esprili. Hata yapmaktan korkmamayı öğütler.",
   learner_name: "",
+  profile: blankProfile(),
+  profile_done: false,
   voice_on: true, voice_name: "", rate: 0.9, silence_ms: 1400,
   furigana: "unknown", show_tr: false,
 };
 
 function blank() {
   return {
-    settings: { ...DEFAULT_SETTINGS }, kv: {}, sessions: [], messages: [], facts: [],
+    settings: { ...DEFAULT_SETTINGS, profile: blankProfile() }, kv: {}, sessions: [], messages: [], facts: [],
     mistakes: [], vocab: [], unit_content: {}, unit_progress: {}, next_id: 1,
   };
 }
 
 const now = () => new Date().toISOString().slice(0, 19);
+const LS = () => globalThis.localStorage;
 
-function load() {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) {
-      const d = JSON.parse(raw);
-      const b = blank();
-      return { ...b, ...d, settings: { ...b.settings, ...(d.settings || {}) } };
-    }
-  } catch (e) { console.warn("hafıza okunamadı", e); }
-  return blank();
+function readJSON(key) {
+  try { const raw = LS().getItem(key); return raw ? JSON.parse(raw) : null; }
+  catch (e) { console.warn("okunamadı:", key, e); return null; }
 }
 
-let db = load();
+// ---------- 0.3.x → 0.4 taşıma (yalnızca Japonca) ----------
+// Eski tek-dilli hafıza "kotonoha-v1" anahtarındaydı. Japonca sürüm ilk açıldığında:
+//  - hafıza "kotonoha-v1-ja"ya taşınır,
+//  - API anahtarları ortak depoya geçer,
+//  - eskiden talimata gömülü olan öğrenci bilgisi (Japon Dili ve Edebiyatı, Japonya planı)
+//    öğrenci profiline yazılır; profil ekranından değiştirilebilir.
+// Yeni kayıt hiç kullanılmamışsa (oturum, kelime, profil yok) boş sayılır; taşıma yine yapılır.
+function isEmptyStore(d) {
+  return !d || (!(d.sessions || []).length && !(d.vocab || []).length && !d.settings?.profile_done);
+}
+
+export function migrateLegacy() {
+  if (pack.code !== "ja") return false;
+  const ls = LS();
+  if (!ls.getItem(LEGACY_KEY) || !isEmptyStore(readJSON(KEY))) return false;
+  const d = readJSON(LEGACY_KEY);
+  if (!d || typeof d !== "object") return false;
+  const s = d.settings || (d.settings = {});
+  const shared = { ...DEFAULT_SHARED, ...(readJSON(SHARED_KEY) || {}) };
+  for (const k of SHARED_FIELDS) {
+    if (k in s) {
+      if (s[k] && (!shared[k] || shared[k] === DEFAULT_SHARED[k])) shared[k] = s[k];
+      delete s[k];
+    }
+  }
+  if (!s.profile) {
+    s.profile = {
+      level_self: "", goals: ["school", "travel"],
+      about: "Japon Dili ve Edebiyatı bölümünde okuyor; yazın iki aylığına Japonya'ya gitmeyi planlıyor.",
+      interests: "çizim, anime, oyunlar, edebiyat",
+    };
+  }
+  s.profile_done = true;
+  try {
+    ls.setItem(SHARED_KEY, JSON.stringify(shared));
+    ls.setItem(KEY, JSON.stringify(d));
+    if (ls.getItem(KEY)) ls.removeItem(LEGACY_KEY);   // yeni kayıt yerindeyse eskisini sil
+    return true;
+  } catch (e) {
+    console.error("taşıma yapılamadı", e);
+    return false;
+  }
+}
+
+function load() {
+  const d = readJSON(KEY);
+  const b = blank();
+  if (!d) return b;
+  const st = { ...b.settings, ...(d.settings || {}) };
+  st.profile = { ...blankProfile(), ...(st.profile || {}) };
+  for (const k of SHARED_FIELDS) delete st[k];
+  return { ...b, ...d, settings: st };
+}
+
+function loadShared() {
+  return { ...DEFAULT_SHARED, ...(readJSON(SHARED_KEY) || {}) };
+}
+
+let db, shared;
+export function init() {
+  try { migrateLegacy(); } catch (e) { console.error(e); }
+  db = load();
+  shared = loadShared();
+}
+init();
+
 let saveTimer = null;
 
 function save() {
@@ -48,13 +119,16 @@ function save() {
 export function saveNow() {
   clearTimeout(saveTimer);
   trim();
-  try { localStorage.setItem(KEY, JSON.stringify(db)); }
-  catch (e) { console.error("hafıza yazılamadı", e); }
+  try {
+    LS().setItem(KEY, JSON.stringify(db));
+    LS().setItem(SHARED_KEY, JSON.stringify(shared));
+  } catch (e) { console.error("hafıza yazılamadı", e); }
 }
 
 function trim() {
   // Depo sınırını aşmamak için: özeti çıkarılmış eski oturumların mesajlarını sil.
-  if (db.messages.length <= 3000) return;
+  // (localStorage sınırı ~5 MB ve üç dil aynı sınırı paylaşıyor.)
+  if (db.messages.length <= 2500) return;
   const keep = new Set(db.sessions.slice(-40).map(s => s.id));
   const summarized = new Set(db.sessions.filter(s => s.summarized).map(s => s.id));
   db.messages = db.messages.filter(m => keep.has(m.session_id) || !summarized.has(m.session_id));
@@ -70,12 +144,16 @@ export async function requestPersist() {
 }
 
 // ---------- ayarlar ----------
-export const settings = () => db.settings;
-export function setSetting(k, v) { db.settings[k] = v; save(); }
-export function apiKey() {
-  const s = db.settings;
-  return s.provider === "openai" ? s.openai_key : s.claude_key;
+// Dile ait ayarlar + ortak (anahtar/model) ayarlar tek nesne olarak görünür.
+export const settings = () => ({ ...db.settings, ...shared });
+export function setSetting(k, v) {
+  if (SHARED_FIELDS.includes(k)) shared[k] = v; else db.settings[k] = v;
+  save();
 }
+export function apiKey() {
+  return shared.provider === "openai" ? shared.openai_key : shared.claude_key;
+}
+export const profile = () => db.settings.profile || blankProfile();
 
 // ---------- anahtar/değer ----------
 export const get = (k, d = null) => (k in db.kv ? db.kv[k] : d);
@@ -139,10 +217,10 @@ export function mistakeStats(n = 5) {
 }
 
 // ---------- kelimeler ve aralıklı tekrar ----------
-export function addWord(word, reading = "", meaning_tr = "", example_ja = "", example_tr = "", source = "") {
+export function addWord(word, reading = "", meaning_tr = "", example = "", example_tr = "", source = "") {
   word = (word || "").trim();
   if (!word || db.vocab.some(w => w.word === word)) return;
-  db.vocab.push({ id: id(), word, reading, meaning_tr, example_ja, example_tr, source,
+  db.vocab.push({ id: id(), word, reading, meaning_tr, example_ja: example, example_tr, source,
                   interval_days: 0, ease: 2.5, reps: 0, lapses: 0, due: now(), created: now() });
   save();
 }
@@ -183,18 +261,22 @@ export const completedUnits = () => Object.fromEntries(
 export function exportJSON() {
   saveNow();
   const copy = JSON.parse(JSON.stringify(db));
-  copy.settings.claude_key = "";
-  copy.settings.openai_key = "";
-  return JSON.stringify({ app: "Kotonoha", version: 1, exported: now(), data: copy }, null, 1);
+  for (const k of SHARED_FIELDS) delete copy.settings[k];
+  return JSON.stringify({ app: "Kotonoha", lang: pack.code, version: 2, exported: now(), data: copy }, null, 1);
 }
 export function importJSON(text) {
   const obj = JSON.parse(text);
   if (obj.app !== "Kotonoha" || !obj.data) throw new Error("Bu bir Kotonoha yedeği değil.");
-  const keep = { claude_key: db.settings.claude_key, openai_key: db.settings.openai_key };
+  const lang = obj.lang || "ja";        // 0.3.x yedekleri dil bilgisi taşımaz; hepsi Japonca
+  if (lang !== pack.code) throw new Error(`Bu yedek ${lang.toUpperCase()} sürümüne ait; ${pack.code.toUpperCase()} sürümüne yüklenemez.`);
   const b = blank();
-  db = { ...b, ...obj.data, settings: { ...b.settings, ...obj.data.settings, ...keep } };
+  const st = { ...b.settings, ...(obj.data.settings || {}) };
+  for (const k of SHARED_FIELDS) delete st[k];
+  st.profile = { ...blankProfile(), ...(st.profile || {}) };
+  if (!obj.lang && !obj.data.settings?.profile) st.profile_done = false;   // eski yedek: profili sorsun
+  db = { ...b, ...obj.data, settings: st };
   saveNow();
 }
 
 // Testler için
-export function _reset() { db = blank(); }
+export function _reset() { db = blank(); shared = { ...DEFAULT_SHARED }; }

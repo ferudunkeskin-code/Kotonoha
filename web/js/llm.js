@@ -3,7 +3,8 @@
 
 export class LLMError extends Error {}
 
-export function normalizeMessages(messages) {
+// start: konuşmayı avatar başlatıyorsa başa konan kısa kullanıcı mesajı (dil paketinden).
+export function normalizeMessages(messages, start = "（始めてください）") {
   const out = [];
   for (const m of messages) {
     const role = m.role, content = (m.content || "").trim();
@@ -11,8 +12,8 @@ export function normalizeMessages(messages) {
     if (out.length && out[out.length - 1].role === role) out[out.length - 1].content += "\n\n" + content;
     else out.push({ role, content });
   }
-  if (out.length && out[0].role === "assistant") out.unshift({ role: "user", content: "（始めてください）" });
-  if (!out.length) out.push({ role: "user", content: "（始めてください）" });
+  if (out.length && out[0].role === "assistant") out.unshift({ role: "user", content: start });
+  if (!out.length) out.push({ role: "user", content: start });
   return out;
 }
 
@@ -47,8 +48,8 @@ async function post(url, headers, body) {
 
 // Kopyala-yapıştırda araya giren boşluk, satır sonu ve görünmez karakterleri temizler.
 export function cleanKey(k) {
-  return String(k || "").replace(/[\s\u200B-\u200D\u2060\uFEFF\u00A0]/g, "")
-    .replace(/[\u2010-\u2015\u2212]/g, "-");   // telefonun "akıllı" tirelerini düz tireye çevir
+  return String(k || "").replace(/[\s​-‍⁠﻿ ]/g, "")
+    .replace(/[‐-―−]/g, "-");   // telefonun "akıllı" tirelerini düz tireye çevir
 }
 
 export function describeKey(k) {
@@ -57,8 +58,8 @@ export function describeKey(k) {
   return `${k.slice(0, 10)}…${k.slice(-4)} (${k.length} karakter)`;
 }
 
-export async function chat(s, system, messages, maxTokens = 1500) {
-  const msgs = normalizeMessages(messages);
+export async function chat(s, system, messages, maxTokens = 1500, start) {
+  const msgs = normalizeMessages(messages, start);
   if (s.provider === "openai") {
     if (!s.openai_key) throw new LLMError("API_KEY_MISSING");
     const d = await post("https://api.openai.com/v1/chat/completions",

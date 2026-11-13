@@ -1,7 +1,7 @@
-// Kotonoha service worker: uygulama dosyalarını önbelleğe alır.
+// Kotonoha service worker: uygulama dosyalarını önbelleğe alır (üç dil için ortak; kapsam: sitenin tamamı).
 // Uygulama dosyaları: önce internetten (güncel sürüm gelsin), yoksa önbellekten.
-// Furigana sözlüğü (CDN): önce önbellekten (12 MB bir kez indirilsin).
-const APP = "kotonoha-app-v2";
+// Furigana sözlüğü (CDN, yalnızca Japonca): önce önbellekten (12 MB bir kez indirilsin).
+const APP = "kotonoha-app-v3";
 const CDN = "kotonoha-cdn-v1";
 
 self.addEventListener("install", () => self.skipWaiting());
