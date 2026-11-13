@@ -48,6 +48,11 @@ button, select, textarea, input { font: inherit; color: inherit; }
 #vbar.listening #vbar-state { animation: pulse 1.2s infinite; }
 #vbar.sleeping { background: #ece6f3; }
 #vbar-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18px; }
+#vbar { flex-wrap: wrap; }
+.vctl { display: inline-flex; align-items: center; gap: 2px; font-size: 15px; white-space: nowrap;
+  background: rgba(255,255,255,.6); border-radius: 999px; padding: 2px 4px 2px 8px; }
+.vctl b { min-width: 34px; text-align: center; font-weight: 600; }
+.vctl button { border: 0; background: white; border-radius: 999px; width: 32px; height: 32px; font-size: 18px; cursor: pointer; }
 #vbar-off { border: 0; background: none; font-size: 18px; cursor: pointer; color: var(--muted); }
 .sent { display: flex; align-items: flex-start; gap: 4px; padding: 2px 0; border-bottom: 1px dashed var(--line); }
 .sent:last-child { border-bottom: 0; }

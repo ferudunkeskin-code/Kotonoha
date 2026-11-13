@@ -12,7 +12,7 @@ export const DEFAULT_SETTINGS = {
   persona: "Sakin, meraklı ve biraz esprili. Çizime, edebiyata ve oyunlara ilgi duyar. " +
            "Hata yapmaktan korkmamayı öğütler.",
   learner_name: "",
-  voice_on: true, voice_name: "", rate: 0.9,
+  voice_on: true, voice_name: "", rate: 0.9, silence_ms: 1400,
   furigana: "unknown", show_tr: false,
 };
 

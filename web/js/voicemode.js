@@ -11,7 +11,7 @@
 
 const Rec = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 
-const SILENCE_MS = 1400;           // bu kadar sessizlik olunca söylenen gönderilir
+export const DEFAULT_SILENCE_MS = 1400;   // bu kadar sessizlik olunca söylenen gönderilir (Ayarlar'dan değişir)
 const IDLE_TO_SLEEP_MS = 3 * 60e3; // 3 dakika kimse konuşmazsa uyur
 const SLEEP_TO_OFF_MS = 5 * 60e3;  // 5 dakika uykuda kalırsa tamamen kapanır
 
@@ -46,6 +46,7 @@ export class VoiceMode {
   constructor(cb) {
     this.cb = cb;
     this.state = "off";
+    this.silenceMs = DEFAULT_SILENCE_MS;
     this.rec = null;
     this.text = "";
     this.silenceTimer = null;
@@ -145,7 +146,7 @@ export class VoiceMode {
       this.text = t;
       this.cb.onState?.("listening", t);
       clearTimeout(this.silenceTimer);
-      this.silenceTimer = setTimeout(() => this._commit(), SILENCE_MS);
+      this.silenceTimer = setTimeout(() => this._commit(), this.silenceMs);
     };
     r.onerror = e => {
       if (this.rec !== r) return;

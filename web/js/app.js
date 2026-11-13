@@ -8,7 +8,7 @@ import { Avatar } from "./avatar.js";
 import { LLMError, chat, cleanKey, describeKey } from "./llm.js";
 import { VoiceMode, voiceModeAvailable } from "./voicemode.js";
 
-export const APP_VERSION = "0.3.0-web";
+export const APP_VERSION = "0.3.1-web";
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
 
@@ -310,12 +310,47 @@ const vm = new VoiceMode({
   onError: msg => toast(msg, 6000),
 });
 
+// ---- hız ve sıra geçme süresi: anında kaydedilir, bir sonraki açılışta hatırlanır ----
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+function setRate(r) {
+  r = Math.round(clamp(r, 0.6, 1.4) * 100) / 100;
+  store.setSetting("rate", r);
+  store.saveNow();
+  showVoiceSettings();
+}
+function setWait(ms) {
+  ms = Math.round(clamp(ms, 600, 4000) / 100) * 100;
+  store.setSetting("silence_ms", ms);
+  store.saveNow();
+  vm.silenceMs = ms;
+  showVoiceSettings();
+}
+function showVoiceSettings() {
+  const s = S();
+  $("#vctl-wait").textContent = (s.silence_ms / 1000).toFixed(1);
+  $("#vctl-rate").textContent = Number(s.rate).toFixed(2);
+  if ($("#f-wait-v")) { $("#f-wait-v").textContent = (s.silence_ms / 1000).toFixed(1); $("#f-wait").value = s.silence_ms / 1000; }
+  if ($("#f-rate-v")) { $("#f-rate-v").textContent = Number(s.rate).toFixed(2); $("#f-rate").value = s.rate; }
+}
+ui.vbar.addEventListener("click", e => {
+  const c = e.target.closest("[data-vctl]")?.dataset.vctl;
+  if (!c) return;
+  if (c === "wait-") setWait(S().silence_ms - 200);
+  else if (c === "wait+") setWait(S().silence_ms + 200);
+  else if (c === "rate-") setRate(Number(S().rate) - 0.05);
+  else if (c === "rate+") setRate(Number(S().rate) + 0.05);
+  if (c.startsWith("rate")) toast(`Konuşma hızı ${Number(S().rate).toFixed(2)} (kaydedildi)`, 1500);
+  else toast(`Sıra geçme süresi ${(S().silence_ms / 1000).toFixed(1)} sn (kaydedildi)`, 1500);
+});
+
 function toggleVoice() {
   if (vm.on) { vm.stop(); speech.stop(); toast("Konuşma modu kapandı."); return; }
   if (!voiceModeAvailable()) { toast("Bu tarayıcıda konuşma tanıma yok.", 5000); return; }
   if (ui.input.disabled) return;
   stopListening();
   speech.unlock();
+  vm.silenceMs = Number(S().silence_ms) || 1400;
+  showVoiceSettings();
   vm.start();
   if (state.busy) vm.pause();     // cevap bekleniyorsa, cevaptan sonra dinlemeye başlar
   toast("🎧 Konuşma modu açık. Konuş; kısa bir sessizlikten sonra kendiliğinden gönderilir. Uyutmak için 「おやすみ」.", 7000);
@@ -396,7 +431,11 @@ function showSettings() {
     <label class="row"><input type="checkbox" id="f-voice" ${s.voice_on ? "checked" : ""}> Avatar sesli konuşsun</label>
     <label>Ses</label><select id="f-vname">${vopts}</select>
     <label>Konuşma hızı: <span id="f-rate-v">${Number(s.rate).toFixed(2)}</span></label>
-    <input type="range" id="f-rate" min="0.6" max="1.2" step="0.05" value="${s.rate}" style="width:100%">
+    <input type="range" id="f-rate" min="0.6" max="1.4" step="0.05" value="${s.rate}" style="width:100%">
+    <label>🎧 Konuşma modunda sıra geçme süresi: <span id="f-wait-v">${(s.silence_ms / 1000).toFixed(1)}</span> sn</label>
+    <input type="range" id="f-wait" min="0.6" max="4" step="0.2" value="${s.silence_ms / 1000}" style="width:100%">
+    <div class="hint">Sustuktan kaç saniye sonra söylediğin gönderilsin. Kısa: hızlı karşılıklı konuşma; uzun: düşünmek için zaman. Varsayılan 1.4 sn.
+      Hız ve süre değiştirdiğin anda kaydedilir; konuşma modundaki ⏱ ve 🗣 düğmeleriyle de ayarlanabilir.</div>
     <button class="btn alt" data-act="test-voice">▶ Dene</button>
     ${voices.length ? "" : '<div class="hint">Japonca ses bulunamadı. iPad: Ayarlar → Erişilebilirlik → Seslendirilen İçerik → Sesler → Japonca.</div>'}
   </div>
@@ -408,7 +447,11 @@ function showSettings() {
   <button class="btn warm" data-act="save-settings">Kaydet</button>
   <div class="muted" style="margin-top:20px">Kotonoha ${APP_VERSION}</div></div>`;
   $("#f-provider").value = s.provider;
-  $("#f-rate").oninput = e => { $("#f-rate-v").textContent = Number(e.target.value).toFixed(2); };
+  // Hız ve bekleme süresi değiştiği anda kaydedilir ("Kaydet"e basmak gerekmez).
+  $("#f-rate").oninput = e => setRate(Number(e.target.value));
+  $("#f-wait").oninput = e => setWait(Number(e.target.value) * 1000);
+  $("#f-vname").onchange = e => store.setSetting("voice_name", e.target.value);
+  $("#f-voice").onchange = e => store.setSetting("voice_on", e.target.checked);
   $("#f-import").onchange = importBackup;
 }
 
@@ -420,6 +463,7 @@ function readSettingsForm() {
     openai_key: cleanKey(v("#f-okey")), openai_model: v("#f-omodel") || "gpt-4o",
     character_name: v("#f-name") || "Kotonoha", persona: v("#f-persona"), learner_name: v("#f-learner"),
     voice_on: $("#f-voice").checked, voice_name: $("#f-vname").value, rate: Number($("#f-rate").value),
+    silence_ms: Math.round(Number($("#f-wait").value) * 1000),
   };
 }
 
