@@ -10,7 +10,7 @@ import { Avatar } from "./avatar.js";
 import { LLMError, chat, cleanKey, describeKey } from "./llm.js";
 import { VoiceMode, voiceModeAvailable } from "./voicemode.js";
 
-export const APP_VERSION = "0.4.0-web";
+export const APP_VERSION = "0.4.1-web";
 const ROOT = new URL("../", import.meta.url);      // sitenin kökü (web/), dil klasöründen bağımsız
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
@@ -85,7 +85,9 @@ function speakText(text, i, onEnd = () => {}) {
 
 function addSpeak(text) { state.speak.push(text); return state.speak.length - 1; }
 
-function errorCard(msg) { return `<div class="card warn">⚠️ ${esc(msg)}</div>`; }
+function errorCard(msg, guide = false) {
+  return `<div class="card warn">⚠️ ${esc(msg)}${guide ? '<br><button class="btn alt" data-act="key-guide">🔑 Anahtar nasıl alınır?</button>' : ""}</div>`;
+}
 
 function showError(e) {
   setBusy(false);
@@ -96,9 +98,9 @@ function showError(e) {
   }
   const msg = e instanceof Error ? e.message : String(e);
   if (msg.includes("API_KEY_MISSING")) {
-    ui.content.insertAdjacentHTML("beforeend", errorCard("API anahtarı girilmemiş. ⚙️ Ayarlar'dan ekleyin."));
+    ui.content.insertAdjacentHTML("beforeend", errorCard("API anahtarı girilmemiş. ⚙️ Ayarlar'dan ekleyin.", true));
   } else {
-    ui.content.insertAdjacentHTML("beforeend", errorCard(msg));
+    ui.content.insertAdjacentHTML("beforeend", errorCard(msg, msg.includes("401")));
   }
   scrollBottom();
 }
@@ -150,7 +152,8 @@ function showHome() {
   let html = `<h2>${esc(pack.greet(s.learner_name))}</h2>
     <div class="muted">Ben ${esc(s.character_name)}, ${esc(pack.nameTr)} konuşma partnerin. Bugün ne çalışalım?</div>`;
   if (!store.apiKey()) html += `<div class="card warn">Başlamak için <b>⚙️ Ayarlar</b>'dan bir API anahtarı girin.
-    <br><button class="btn" data-nav="settings">Ayarlara git</button></div>`;
+    Anahtarın yoksa nasıl alınacağı orada adım adım anlatılıyor.
+    <br><button class="btn" data-nav="settings">Ayarlara git</button><button class="btn alt" data-act="key-guide">🔑 Anahtar nasıl alınır?</button></div>`;
   if (pack.furigana && !furi.ready()) html += `<div class="card muted">Furigana sözlüğü yükleniyor… (ilk açılışta biraz sürer)</div>`;
   if (s.voice_on && speech.ttsAvailable() && !speech.targetVoices().length)
     html += `<div class="card warn">Bu cihazda ${esc(pack.nameTr)} ses bulunamadı. iPad'de: Ayarlar → Erişilebilirlik →
@@ -460,13 +463,55 @@ function showProgress() {
 }
 
 // ================= ayarlar =================
+// API anahtarı alma rehberi (Ayarlar'da her anahtar alanının altında açılır kutu).
+// Bağlantılar yeni sekmede açılır; ana ekrana eklenen uygulamada Safari'ye geçer, uygulama yerinde kalır.
+const ext = (href, text) => `<a class="btn alt" href="${href}" target="_blank" rel="noopener">${text} ↗</a>`;
+function keyGuide(provider, open) {
+  if (provider === "openai") return `<details class="guide" id="g-openai" ${open ? "open" : ""}>
+    <summary>🔑 OpenAI anahtarım yok — nasıl alırım?</summary>
+    <ol>
+      <li><b>platform.openai.com</b> adresinde hesap aç (Google hesabıyla da olur). Burası ChatGPT'den
+        ayrı bir sitedir; <b>ChatGPT Plus aboneliği API kullanımını kapsamaz</b>.</li>
+      <li><b>Billing</b> (Faturalandırma) sayfasında kart ekleyip ön ödemeli kredi yükle (az bir miktar yeter).</li>
+      <li><b>API keys</b> sayfasında <b>Create new secret key</b>'e bas, bir ad ver (ör. Kotonoha).</li>
+      <li><code>sk-</code> ile başlayan anahtar <b>yalnızca bir kez</b> gösterilir: hemen kopyala,
+        yukarıdaki kutuya yapıştır, <b>🔌 Bağlantıyı dene</b>, sonra <b>Kaydet</b>.</li>
+    </ol>
+    ${ext("https://platform.openai.com/api-keys", "API anahtarları")}
+    ${ext("https://platform.openai.com/settings/organization/billing/overview", "Kredi yükle")}
+  </details>`;
+  return `<details class="guide" id="g-claude" ${open ? "open" : ""}>
+    <summary>🔑 Claude anahtarım yok — nasıl alırım?</summary>
+    <ol>
+      <li><b>Claude Console</b>'a (platform.claude.com) gir ya da hesap aç. Burası claude.ai'den ayrıdır;
+        <b>Claude Pro aboneliği API kullanımını kapsamaz</b>, kredi ayrıca yüklenir.</li>
+      <li><b>Billing</b> sayfasında kart ekleyip kredi satın al (az bir miktar yeter; harcadıkça azalır).</li>
+      <li><b>API keys</b> sayfasında <b>Create key</b>'e bas, bir ad ver (ör. Kotonoha). Süre sorarsa
+        uzun bir süre seçebilirsin; süresi dolunca yeni anahtar almak gerekir.</li>
+      <li><code>sk-ant-</code> ile başlayan anahtar <b>yalnızca bir kez</b> gösterilir: hemen kopyala,
+        yukarıdaki kutuya yapıştır, <b>🔌 Bağlantıyı dene</b>, sonra <b>Kaydet</b>.</li>
+    </ol>
+    ${ext("https://platform.claude.com/settings/keys", "API anahtarları")}
+    ${ext("https://platform.claude.com/settings/billing", "Kredi yükle")}
+  </details>`;
+}
+const KEY_TIPS = `<div class="hint">💡 Anahtar bir şifre gibidir: kimseyle paylaşma, ekran görüntüsüne çıkarma.
+  Kullanım ücreti bu anahtarın sahibinin hesabından düşer; Console'da harcama sınırı koyabilirsin.
+  Bir aile üyesi kendi anahtarını senin için girebilir.</div>`;
+
+function openKeyGuide() {
+  const prov = S().provider === "openai" ? "openai" : "claude";
+  showSettings(prov);
+  setTimeout(() => $("#g-" + prov)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+}
+
 function langLink(code) {
   const p = PACKS[code];
   const href = new URL(code === "ja" ? "./" : `${code}/`, ROOT).href;
   return `<a class="btn alt" href="${href}">${FLAGS[code] || ""} ${esc(p.nameTr)}</a>`;
 }
 
-function showSettings() {
+function showSettings(guideOpen = null) {
   setMode("settings", "⚙️ Ayarlar");
   const s = S();
   const pr = store.profile();
@@ -480,8 +525,11 @@ function showSettings() {
     <select id="f-provider"><option value="claude">Claude (Anthropic)</option><option value="openai">OpenAI (ChatGPT)</option></select>
     <label>Claude API anahtarı</label><input type="password" id="f-ckey" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(s.claude_key)}">
     <div class="hint">Kayıtlı: ${esc(describeKey(s.claude_key))}</div>
+    ${keyGuide("claude", (!s.claude_key && s.provider !== "openai") || guideOpen === "claude")}
     <label>Claude modeli</label><input type="text" id="f-cmodel" value="${esc(s.claude_model)}" autocapitalize="off">
-    <label>OpenAI API anahtarı</label><input type="password" id="f-okey" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(s.openai_key)}">
+    <label>OpenAI API anahtarı <span class="hint">(isteğe bağlı; Claude yerine kullanmak istersen)</span></label><input type="password" id="f-okey" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(s.openai_key)}">
+    ${keyGuide("openai", (!s.openai_key && s.provider === "openai") || guideOpen === "openai")}
+    ${KEY_TIPS}
     <label>OpenAI modeli</label><input type="text" id="f-omodel" value="${esc(s.openai_model)}" autocapitalize="off">
     <button class="btn alt" data-act="test-key">🔌 Bağlantıyı dene</button>
     <div id="f-keytest" class="hint"></div>
@@ -623,6 +671,7 @@ ui.content.addEventListener("click", e => {
   else if (act === "export") exportBackup();
   else if (act === "profile") showProfile(false);
   else if (act === "profile-save") saveProfile();
+  else if (act === "key-guide") openKeyGuide();
 });
 
 function go(nav) {
