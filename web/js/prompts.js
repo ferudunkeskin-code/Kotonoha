@@ -47,6 +47,14 @@ konularda doğal bir sohbet yürüt. Sohbeti canlı tutmak için cevabının son
 Seviye tahmini henüz yoksa ilk birkaç mesajda farklı zorlukta sorularla seviyesini yokla.
 `;
 
+export const VOICE_TALK = `SESLİ SOHBET AÇIK: Öğrenci konuşuyor, sen de sesli cevap veriyorsun.
+- Cevabın EN FAZLA 1-2 kısa cümle olsun; doğal bir konuşma hızında, karşılıklı.
+- Öğrencinin mesajı konuşma tanımadan geliyor: yanlış kanji, eksik noktalama, eş sesli
+  kelime karışıklığı gibi TANIMA hatalarını öğrencinin hatası sayma ve düzeltme.
+  Yalnızca açık bir dilbilgisi ya da kelime seçimi hatası varsa "correction" ver.
+- Öğrenci "おやすみ" derse uygulama kendisi uyku moduna geçer; sen bununla ilgilenme.
+`;
+
 export const SUMMARY = transcript => `Aşağıdaki Japonca pratik oturumunu özetle.
 
 ${transcript}

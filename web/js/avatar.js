@@ -8,6 +8,7 @@ export class Avatar {
     this.mouth = "closed";
     this.blinking = false;
     this.thinking = false;
+    this.sleeping = false;
     this.dots = 0;
     this.layers = {};
     new ResizeObserver(() => this.resize()).observe(canvas);
@@ -26,6 +27,7 @@ export class Avatar {
 
   setMouth(m) { if (m !== this.mouth) { this.mouth = m; this.draw(); } }
   setThinking(on) { this.thinking = on; this.draw(); }
+  setSleeping(on) { this.sleeping = on; this.draw(); }
 
   scheduleBlink() {
     setTimeout(() => {
@@ -84,7 +86,7 @@ export class Avatar {
     ctx.strokeStyle = ctx.fillStyle = "#2b2724";
     ctx.lineWidth = Math.max(2, u * 0.12);
     for (const ex of [cx - 0.85 * u, cx + 0.85 * u]) {
-      if (this.blinking) { ctx.beginPath(); ctx.moveTo(ex - 0.35 * u, ey); ctx.lineTo(ex + 0.35 * u, ey); ctx.stroke(); }
+      if (this.blinking || this.sleeping) { ctx.beginPath(); ctx.moveTo(ex - 0.35 * u, ey); ctx.lineTo(ex + 0.35 * u, ey); ctx.stroke(); }
       else ellipse(ctx, ex, ey, 0.22 * u, 0.3 * u);
     }
     // ağız
@@ -95,6 +97,15 @@ export class Avatar {
     else {
       ctx.lineWidth = Math.max(2, u * 0.1);
       ctx.beginPath(); ctx.moveTo(cx - 0.3 * u, my); ctx.lineTo(cx + 0.3 * u, my); ctx.stroke();
+    }
+    // uyku: "z z z"
+    if (this.sleeping) {
+      ctx.fillStyle = "rgba(255,255,255,.85)";
+      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      [[0, 0.9], [0.5, 1.15], [1.0, 1.4]].forEach(([dx, sz]) => {
+        ctx.font = `bold ${Math.round(u * 0.55 * sz)}px sans-serif`;
+        ctx.fillText("z", cx + (2.4 + dx) * u, top + (1.6 - dx * 0.9) * u);
+      });
     }
     // not
     ctx.fillStyle = "rgba(255,255,255,.6)";

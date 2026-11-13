@@ -41,8 +41,14 @@
       </select>
     </header>
     <main id="main"><div id="content"></div></main>
+    <div id="vbar" hidden>
+      <span id="vbar-state">🎧</span>
+      <span id="vbar-text"></span>
+      <button id="vbar-off" title="Konuşma modunu kapat">✕</button>
+    </div>
     <footer id="composer">
       <textarea id="input" rows="2" placeholder="Japonca (ya da Türkçe) yaz…" disabled></textarea>
+      <button id="btn-voice" title="Konuşma modu" disabled>🎧</button>
       <button id="btn-mic" title="Konuş" disabled>🎤</button>
       <button id="btn-send" disabled>Gönder</button>
     </footer>

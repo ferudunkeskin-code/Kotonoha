@@ -5,15 +5,17 @@ import * as furi from "./furigana.js";
 import * as speech from "./speech.js";
 import { Avatar } from "./avatar.js";
 import { LLMError, chat, cleanKey, describeKey } from "./llm.js";
+import { VoiceMode, voiceModeAvailable } from "./voicemode.js";
 
-export const APP_VERSION = "0.1.2-web";
+export const APP_VERSION = "0.2.0-web";
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
 
 const ui = {
   content: $("#content"), main: $("#main"), title: $("#title"), input: $("#input"),
   send: $("#btn-send"), mic: $("#btn-mic"), tr: $("#chk-tr"), furi: $("#sel-furi"),
-  name: $("#char-name"), toast: $("#toast"),
+  name: $("#char-name"), toast: $("#toast"), voice: $("#btn-voice"),
+  vbar: $("#vbar"), vstate: $("#vbar-state"), vtext: $("#vbar-text"),
 };
 const avatar = new Avatar($("#avatar"));
 
@@ -39,7 +41,8 @@ function scrollBottom() { ui.main.scrollTop = ui.main.scrollHeight; }
 function setInput(enabled, placeholder) {
   ui.input.disabled = !enabled;
   ui.send.disabled = !enabled || state.busy;
-  ui.mic.disabled = !enabled;
+  ui.mic.disabled = !enabled || vm.on;
+  ui.voice.disabled = !enabled;
   if (placeholder) ui.input.placeholder = placeholder;
 }
 
@@ -48,6 +51,7 @@ function setBusy(on) {
   avatar.setThinking(on);
   ui.send.disabled = on || ui.input.disabled;
   $("#thinking")?.remove();
+  if (vm.state === "waiting") ui.vtext.textContent = on ? "düşünüyor…" : "konuşuyor…";
   if (on) {
     ui.content.insertAdjacentHTML("beforeend",
       `<div id="thinking" class="thinking">${esc(S().character_name)} düşünüyor…</div>`);
@@ -60,10 +64,10 @@ function guard(fn) {
   return (...a) => { if (g === state.gen) fn(...a); };
 }
 
-function speakText(text, i) {
+function speakText(text, i, onEnd = () => {}) {
   speech.speak(text, {
     voiceName: S().voice_name, rate: Number(S().rate) || 0.9, silent: !S().voice_on,
-    onMouth: m => avatar.setMouth(m),
+    onMouth: m => avatar.setMouth(m), onEnd,
   });
 }
 
@@ -73,6 +77,11 @@ function errorCard(msg) { return `<div class="card warn">⚠️ ${esc(msg)}</div
 
 function showError(e) {
   setBusy(false);
+  if (vm.on) {
+    // Konuşma modunda hata: anahtar yoksa kapat, değilse dinlemeye dön.
+    const m = e instanceof Error ? e.message : String(e);
+    if (m.includes("API_KEY_MISSING") || m.includes("401")) vm.stop(); else vm.resume(1500);
+  }
   const msg = e instanceof Error ? e.message : String(e);
   if (msg.includes("API_KEY_MISSING")) {
     ui.content.insertAdjacentHTML("beforeend", errorCard("API anahtarı girilmemiş. ⚙️ Ayarlar'dan ekleyin."));
@@ -84,6 +93,7 @@ function showError(e) {
 
 // ================= ekranlar arası geçiş =================
 function setMode(mode, title) {
+  if (vm.on) vm.stop();
   state.gen++;
   if (state.busy) setBusy(false);
   stopListening();
@@ -152,14 +162,14 @@ function startFree() {
 function renderChat() {
   let html = `<h2>自由会話 · Serbest sohbet</h2><div class="muted">İstediğin konuda yaz.
     Hatalarını en fazla birer birer düzeltirim; yeni kelimeler tekrar listene eklenir.</div>`;
-  for (const item of state.chat) html += item.type === "user" ? userMsg(item.text) : aiMsg(item.data, item.speak);
+  for (const item of state.chat) html += item.type === "user" ? userMsg(item.text, item.spoken) : aiMsg(item.data, item.speak);
   ui.content.innerHTML = html;
   if (state.busy) setBusy(true);
   scrollBottom();
 }
 
-function userMsg(text) {
-  return `<div class="msg me"><div class="b">${esc(text).replace(/\n/g, "<br>")}</div></div>`;
+function userMsg(text, spoken = false) {
+  return `<div class="msg me"><div class="b">${esc(text).replace(/\n/g, "<br>")}${spoken ? '<span class="via">🎧</span>' : ""}</div></div>`;
 }
 
 function aiMsg(d, si) {
@@ -189,7 +199,7 @@ function send() {
 function ask(text) {
   if (!store.apiKey()) { showError(new LLMError("API_KEY_MISSING")); return; }
   setBusy(true);
-  tutor.converse(state.sessionId, text)
+  tutor.converse(state.sessionId, text, { voice: vm.on })
     .then(guard(onReply))
     .catch(guard(showError));
 }
@@ -200,7 +210,50 @@ function onReply(d) {
   state.chat.push({ type: "ai", data: d, speak: si });
   ui.content.insertAdjacentHTML("beforeend", aiMsg(d, si));
   scrollBottom();
-  speakText(d.reply_ja, si);
+  speakText(d.reply_ja, si, guard(() => vm.resume()));
+}
+
+// ================= 🎧 konuşma modu =================
+const STATE_LABEL = {
+  listening: "🎧 Dinliyorum…", waiting: "💭", sleeping: "💤 Uykuda — uyandırmak için 「ねえ、コトノハ」",
+};
+const vm = new VoiceMode({
+  onUtterance: text => {
+    state.chat.push({ type: "user", text, spoken: true });
+    ui.content.insertAdjacentHTML("beforeend", userMsg(text, true));
+    scrollBottom();
+    ask(text);
+  },
+  onState: (st, detail) => {
+    ui.vbar.hidden = st === "off";
+    ui.vbar.className = st;
+    ui.voice.classList.toggle("on", st !== "off");
+    ui.mic.disabled = st !== "off" || ui.input.disabled;
+    ui.vstate.textContent = STATE_LABEL[st] || "";
+    ui.vtext.textContent = st === "listening" ? detail : st === "waiting" ? (state.busy ? "düşünüyor…" : "konuşuyor…") : "";
+    if (st === "off") avatar.setSleeping(false);
+  },
+  onSleep: () => {
+    speech.stop();
+    avatar.setSleeping(false);
+    speakText("おやすみなさい。またね！", -1, () => { avatar.setSleeping(true); vm.listenForWake(); });
+  },
+  onWake: () => {
+    avatar.setSleeping(false);
+    speakText("はい！おかえりなさい。", -1, () => vm.resume());
+  },
+  onError: msg => toast(msg, 6000),
+});
+
+function toggleVoice() {
+  if (vm.on) { vm.stop(); speech.stop(); toast("Konuşma modu kapandı."); return; }
+  if (!voiceModeAvailable()) { toast("Bu tarayıcıda konuşma tanıma yok.", 5000); return; }
+  if (ui.input.disabled) return;
+  stopListening();
+  speech.unlock();
+  vm.start();
+  if (state.busy) vm.pause();     // cevap bekleniyorsa, cevaptan sonra dinlemeye başlar
+  toast("🎧 Konuşma modu açık. Konuş; kısa bir sessizlikten sonra kendiliğinden gönderilir. Uyutmak için 「おやすみ」.", 7000);
 }
 
 // ================= mikrofon =================
@@ -388,6 +441,13 @@ function go(nav) {
 document.querySelectorAll("#nav button").forEach(b => b.addEventListener("click", () => go(b.dataset.nav)));
 
 ui.send.addEventListener("click", send);
+ui.voice.addEventListener("click", toggleVoice);
+$("#vbar-off").addEventListener("click", () => { vm.stop(); speech.stop(); });
+// Avatar konuşurken avatara dokunmak: sustur ve dinlemeye geç
+$("#avatar").addEventListener("click", () => {
+  if (vm.state === "waiting" && !state.busy) { speech.stop(); vm.resume(100); }
+  else if (vm.state === "sleeping") { speech.stop(); vm.wake(); }
+});
 ui.mic.addEventListener("click", toggleMic);
 ui.input.addEventListener("keydown", e => {
   // Japonca klavyede dönüşüm sırasında Enter göndermesin
