@@ -32,8 +32,8 @@ export function parseReply(raw) {
   return d;
 }
 
-export async function converse(sessionId, userText, { voice = false } = {}) {
-  const system = persona() + "\n" + P.FREE_TALK + (voice ? P.VOICE_TALK : "") + P.REPLY_FORMAT;
+export async function converse(sessionId, userText, { voice = false, task = null } = {}) {
+  const system = persona() + "\n" + (task || P.FREE_TALK) + (voice ? P.VOICE_TALK : "") + P.REPLY_FORMAT;
   if (userText) store.addMessage(sessionId, "user", userText);
   const raw = await chat(store.settings(), system, store.history(sessionId, 24), 1200);
   const d = parseReply(raw);

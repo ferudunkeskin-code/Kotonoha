@@ -1,13 +1,14 @@
 // Kotonoha web — arayüz denetleyicisi.
 import * as store from "./store.js";
 import * as tutor from "./tutor.js";
+import { TEXT_TASKS } from "./prompts.js";
 import * as furi from "./furigana.js";
 import * as speech from "./speech.js";
 import { Avatar } from "./avatar.js";
 import { LLMError, chat, cleanKey, describeKey } from "./llm.js";
 import { VoiceMode, voiceModeAvailable } from "./voicemode.js";
 
-export const APP_VERSION = "0.2.0-web";
+export const APP_VERSION = "0.3.0-web";
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
 
@@ -100,6 +101,8 @@ function setMode(mode, title) {
   speech.stop();
   endSession();
   state.mode = mode;
+  state.header = null;
+  state.task = null;
   state.chat = [];
   state.speak = [];
   ui.title.textContent = title;
@@ -151,17 +154,77 @@ function showHome() {
 }
 
 // ================= serbest sohbet =================
+const FREE_HEADER = `<h2>自由会話 · Serbest sohbet</h2><div class="muted">İstediğin konuda yaz.
+    Hatalarını en fazla birer birer düzeltirim; yeni kelimeler tekrar listene eklenir.</div>`;
+
 function startFree() {
   setMode("free", "💬 Serbest sohbet");
   setInput(true, "Japonca yaz… (Türkçe soru da sorabilirsin)");
   state.sessionId = store.newSession("free");
+  state.header = () => FREE_HEADER;
+  state.task = null;
+  renderChat();
+  ask("");
+}
+
+// ================= 📄 metinle çalış =================
+const KINDS = {
+  exam: ["🎓 Sözlü sınav provası", "Kotonoha öğretmen olur; metinle ilgili sorular sorar, cevaplarını değerlendirir, sonunda genel bir değerlendirme yapar."],
+  talk: ["💬 Metin hakkında sohbet", "Metnin konusunu doğal bir sohbette konuşursunuz; metindeki kelime ve kalıpları kullanmaya teşvik eder."],
+  read: ["📖 Sesli okuma", "Metni yüksek sesle okursun (🎤 ya da 🎧 ile); takıldığın ya da yanlış okuduğun yerleri söyler."],
+};
+const MAX_TEXT = 6000;
+
+function splitSentences(text) {
+  return text.split(/(?<=[。！？!?])|\n+/).map(s => s.trim()).filter(Boolean);
+}
+
+function showTextSetup() {
+  setMode("text", "📄 Metinle çalış");
+  const saved = store.get("study_text", "");
+  const kind = store.get("study_kind", "exam");
+  const radios = Object.entries(KINDS).map(([k, [t, d]]) =>
+    `<label><input type="radio" name="kind" value="${k}" ${k === kind ? "checked" : ""}><span><b>${t}</b><br><span class="muted">${d}</span></span></label>`).join("");
+  ui.content.innerHTML = `<h2>テキスト練習 · Metinle çalış</h2>
+    <div class="muted">Çalışmak istediğin Japonca metni aşağıya yapıştır (sınav metni, ders metni, konuşma konusu…).
+    Metin yalnızca bu cihazda saklanır.</div>
+    <div class="form">
+      <label>Metin</label>
+      <textarea id="t-text" style="min-height:180px" placeholder="ここにテキストを貼り付けてください">${esc(saved)}</textarea>
+      <div class="hint"><span id="t-count">${saved.length}</span> / ${MAX_TEXT} karakter</div>
+      <label>Nasıl çalışalım?</label>
+      <div class="kinds">${radios}</div>
+      <button class="btn warm" data-act="text-start">Başla</button>
+    </div>`;
+  $("#t-text").oninput = e => { $("#t-count").textContent = e.target.value.length; };
+}
+
+function startTextFromForm() {
+  const text = $("#t-text").value.trim().slice(0, MAX_TEXT);
+  const kind = document.querySelector('input[name="kind"]:checked')?.value || "exam";
+  if (text.length < 5) { toast("Önce bir metin yapıştır."); return; }
+  startText(text, kind);
+}
+
+function startText(text, kind) {
+  store.set("study_text", text);
+  store.set("study_kind", kind);
+  setMode("text", "📄 " + KINDS[kind][0].slice(2).trim());
+  setInput(true, kind === "read" ? "🎤 ya da 🎧 ile metni oku… (yazabilirsin de)" : "Cevabını yaz ya da 🎧 ile konuş…");
+  state.sessionId = store.newSession("text:" + kind);
+  state.task = TEXT_TASKS[kind](text);
+  const sents = splitSentences(text).map(s => ({ s, i: addSpeak(s) }));
+  state.header = () => `<h2>${KINDS[kind][0]}</h2>
+    <details class="card text-card" ${kind === "read" ? "open" : ""}><summary>📄 Metin (${sents.length} cümle) · 🔊 ile dinle</summary>
+      ${sents.map(({ s, i }) => `<div class="sent"><span class="ja">${ja(s)}</span><button class="icon" data-act="say" data-i="${i}">🔊</button></div>`).join("")}
+      <button class="btn alt" data-nav="text">✏️ Metni değiştir</button>
+    </details>`;
   renderChat();
   ask("");
 }
 
 function renderChat() {
-  let html = `<h2>自由会話 · Serbest sohbet</h2><div class="muted">İstediğin konuda yaz.
-    Hatalarını en fazla birer birer düzeltirim; yeni kelimeler tekrar listene eklenir.</div>`;
+  let html = (state.header || (() => FREE_HEADER))();
   for (const item of state.chat) html += item.type === "user" ? userMsg(item.text, item.spoken) : aiMsg(item.data, item.speak);
   ui.content.innerHTML = html;
   if (state.busy) setBusy(true);
@@ -173,7 +236,8 @@ function userMsg(text, spoken = false) {
 }
 
 function aiMsg(d, si) {
-  const tr = d.reply_tr ? `${TOGGLE}<div class="tr">${esc(d.reply_tr)}</div>` : "";
+  const final = d.goal_reached && state.mode === "text";   // sınav provasının son değerlendirmesi: hep açık
+  const tr = d.reply_tr ? `${TOGGLE}<div class="tr${final ? " open" : ""}">${esc(d.reply_tr)}</div>` : "";
   let fix = "";
   const c = d.correction;
   if (c) fix = `<div class="fix">✏️ 「${esc(c.original)}」 → <b>「${ja(c.corrected)}」</b><br>${esc(c.explanation_tr)}</div>`;
@@ -182,7 +246,8 @@ function aiMsg(d, si) {
   if (nw.length) words = `<div class="muted" style="margin-top:6px">Yeni: ` + nw.map(w =>
     `<span class="pill">${esc(w.word)}（${esc(w.reading)}） ${esc(w.meaning_tr)}</span>`).join(" ") + "</div>";
   return `<div class="msg ai"><div class="b"><span class="ja">${ja(d.reply_ja)}</span>
-    <button class="icon" data-act="say" data-i="${si}" title="Seslendir">🔊</button>${tr}${fix}${words}</div></div>`;
+    <button class="icon" data-act="say" data-i="${si}" title="Seslendir">🔊</button>${tr}${fix}${words}
+    ${final ? '<div><button class="btn warm" data-act="text-again">🔁 Yeniden prova</button><button class="btn alt" data-nav="text">✏️ Başka metin</button></div>' : ""}</div></div>`;
 }
 
 function send() {
@@ -199,7 +264,7 @@ function send() {
 function ask(text) {
   if (!store.apiKey()) { showError(new LLMError("API_KEY_MISSING")); return; }
   setBusy(true);
-  tutor.converse(state.sessionId, text, { voice: vm.on })
+  tutor.converse(state.sessionId, text, { voice: vm.on, task: state.task })
     .then(guard(onReply))
     .catch(guard(showError));
 }
@@ -429,12 +494,15 @@ ui.content.addEventListener("click", e => {
   else if (act === "save-settings") saveSettings();
   else if (act === "test-voice") testVoice();
   else if (act === "test-key") testKey();
+  else if (act === "text-start") startTextFromForm();
+  else if (act === "text-again") startText(store.get("study_text", ""), store.get("study_kind", "exam"));
   else if (act === "export") exportBackup();
 });
 
 function go(nav) {
   if (nav === "home") showHome();
   else if (nav === "free") startFree();
+  else if (nav === "text") showTextSetup();
   else if (nav === "progress") showProgress();
   else if (nav === "settings") showSettings();
 }
@@ -459,7 +527,7 @@ ui.tr.addEventListener("change", () => {
 });
 ui.furi.addEventListener("change", () => {
   store.setSetting("furigana", ui.furi.value);
-  if (state.mode === "free") renderChat();
+  if (state.mode === "free" || (state.mode === "text" && state.sessionId)) renderChat();
 });
 // iPad'de ses ilk dokunuşla açılır
 document.addEventListener("pointerdown", () => speech.unlock(), { once: true, capture: true });
