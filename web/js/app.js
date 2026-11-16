@@ -13,7 +13,7 @@ import * as cloud from "./cloud.js";
 import * as cur from "./curriculum.js";
 import * as P from "./prompts.js";
 
-export const APP_VERSION = "0.6.0-web";
+export const APP_VERSION = "0.6.1-web";
 const ROOT = new URL("../", import.meta.url);      // sitenin kökü (web/), dil klasöründen bağımsız
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
@@ -129,6 +129,8 @@ function setMode(mode, title) {
   state.speak = [];
   state.speakPitch = [];
   state.playTok = null;
+  state.afterListen = null;      // ekran değişirse bekleyen "gönder" iptal
+  state.finishing = false;
   ui.title.textContent = title;
   const navOf = { unit: "units", review: "units" }[mode] || mode;
   document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.nav === navOf));
@@ -380,12 +382,38 @@ function aiMsg(d, si) {
 }
 
 function send() {
+  // 🎤 açıkken "Gönder": mikrofonu hemen kesersek iPad'in henüz yazıya dökmediği son sözcük kaybolur.
+  // Önce kibarca durdur, son sonucu bekle (en çok ~1.5 sn), sonra gönder.
+  if (state.stopListen) { finishListeningThenSend(); return; }
+  if (state.finishing) return;
   const text = ui.input.value.trim();
   if (!text || state.busy || ui.input.disabled) return;
   stopListening(true);
   ui.input.value = "";
   if (state.mode === "home") { startFree(text); return; }     // ana sayfadan doğrudan sohbete
   sendText(text);
+}
+
+function finishListeningThenSend() {
+  if (state.finishing) return;
+  state.finishing = true;
+  ui.send.disabled = true;
+  ui.mic.textContent = "⏳";
+  const stop = state.stopListen;
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    state.afterListen = null;
+    state.finishing = false;
+    stopListening(true);
+    ui.send.disabled = state.busy || ui.input.disabled;
+    send();
+  };
+  state.afterListen = finish;                       // mikrofon kapanınca (son sonuç geldikten sonra) çağrılır
+  const timer = setTimeout(finish, 1800);           // iPad kapanmayı bildirmezse yine de gönder
+  setTimeout(() => stop?.(false), 300);             // söylenen son sesin işlenmesi için kısa bir pay
 }
 
 function sendText(text) {
@@ -591,9 +619,12 @@ function toggleMic() {
     lang: sttLocale(),
     onText: (t, final) => {
       ui.input.value = (base ? base + " " : "") + t;
-      if (final && t) toast("Yazıyı kontrol et, sonra Gönder.", 4000);
+      if (final && t && !state.finishing) toast("Yazıyı kontrol et, sonra Gönder.", 4000);
     },
-    onEnd: () => { state.stopListen = null; ui.mic.classList.remove("rec"); ui.mic.textContent = "🎤"; },
+    onEnd: () => {
+      state.stopListen = null; ui.mic.classList.remove("rec"); ui.mic.textContent = "🎤";
+      if (state.afterListen) state.afterListen();
+    },
     onError: msg => toast(msg, 6000),
   });
 }
