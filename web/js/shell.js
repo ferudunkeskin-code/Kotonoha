@@ -36,14 +36,24 @@ export function buildShell(pack) {
     <div id="vbar" hidden>
       <span id="vbar-state">🎧</span>
       <span id="vbar-text"></span>
+      <span class="vacts">
+        <button id="vbar-hold" class="vbtn" hidden title="Gönderme, düşünüyorum">✋ Bekle</button>
+        <button id="vbar-send" class="vbtn main" hidden title="Söylediğimi gönder">➤ Gönder</button>
+        <button id="vbar-clear" class="vbtn" hidden title="Söylediğimi sil, baştan söyleyeyim">🗑</button>
+        <button id="vbar-lang" class="vbtn sttlang" title="Mikrofon hangi dili dinlesin?"></button>
+        <button id="vbar-repeat" class="vbtn" title="Son cümleyi yavaşça tekrarla">🔁</button>
+        <button id="vbar-pause" class="vbtn" title="Duraklat / devam et">⏸</button>
+      </span>
       <span class="vctl" title="Sıra geçme süresi: sustuktan kaç saniye sonra gönderilsin">⏱
         <button data-vctl="wait-">−</button><b id="vctl-wait">1.4</b><button data-vctl="wait+">+</button></span>
       <span class="vctl" title="Avatarın konuşma hızı">🗣
         <button data-vctl="rate-">−</button><b id="vctl-rate">0.90</b><button data-vctl="rate+">+</button></span>
       <button id="vbar-off" title="Konuşma modunu kapat">✕</button>
+      <div id="vbar-count"><i></i></div>
     </div>
     <footer id="composer">
       <textarea id="input" rows="2" placeholder="${esc(pack.nameTr)} (ya da Türkçe) yaz…" disabled></textarea>
+      <button id="btn-sttlang" class="sttlang" title="Mikrofon hangi dili dinlesin? (dokununca değişir)"></button>
       <button id="btn-voice" title="Konuşma modu" disabled>🎧</button>
       <button id="btn-mic" title="Konuş" disabled>🎤</button>
       <button id="btn-send" disabled>Gönder</button>

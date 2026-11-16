@@ -11,6 +11,7 @@ export const SHARED_KEY = "kotonoha-shared";
 
 export const DEFAULT_SHARED = {
   provider: "claude",
+  backup_code: "",            // Drive yedek kodu (KTN-XXXX-XXXX-XXXX); dillerde ortak
   claude_key: "", claude_model: "claude-sonnet-5-5",
   openai_key: "", openai_model: "gpt-4o",
 };
@@ -24,14 +25,14 @@ export const DEFAULT_SETTINGS = {
   learner_name: "",
   profile: blankProfile(),
   profile_done: false,
-  voice_on: true, voice_name: "", rate: 0.9, silence_ms: 1400,
+  voice_on: true, voice_name: "", rate: 0.9, silence_ms: 1400, voice_send: "auto", stt_tr: false,
   furigana: "unknown", show_tr: false,
 };
 
 function blank() {
   return {
     settings: { ...DEFAULT_SETTINGS, profile: blankProfile() }, kv: {}, sessions: [], messages: [], facts: [],
-    mistakes: [], vocab: [], unit_content: {}, unit_progress: {}, next_id: 1,
+    mistakes: [], vocab: [], unit_content: {}, unit_progress: {}, next_id: 1, rev: 0,
   };
 }
 
@@ -112,6 +113,7 @@ init();
 let saveTimer = null;
 
 function save() {
+  db.rev = (db.rev || 0) + 1;          // her değişiklik sayılır: yedek "değişti mi?" buna bakar
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveNow, 150);
 }
@@ -257,6 +259,24 @@ export const completedUnits = () => Object.fromEntries(
     .map(([u, st]) => [u, st.quiz]));
 
 // ---------- yedekleme ----------
+export const rev = () => db.rev || 0;
+export function isEmpty() { return isEmptyStore(db); }
+export function lastActivity() {
+  const s = db.sessions[db.sessions.length - 1];
+  return s ? s.started : null;
+}
+export const sessionsSince = iso => db.sessions.filter(s => !iso || s.started > iso.slice(0, 19)).length;
+
+// Drive'a giden kısa yedek: özetler, bilgiler, hatalar, kelimeler, profil ve ayarlar eksiksiz;
+// ham mesajlardan yalnızca son 40 oturumunkiler (eskilerin özü zaten özetlerde).
+export function exportCompactJSON() {
+  saveNow();
+  const copy = JSON.parse(JSON.stringify(db));
+  for (const k of SHARED_FIELDS) delete copy.settings[k];
+  const keep = new Set(copy.sessions.slice(-40).map(s => s.id));
+  copy.messages = copy.messages.filter(m => keep.has(m.session_id));
+  return JSON.stringify({ app: "Kotonoha", lang: pack.code, version: 2, compact: true, exported: now(), data: copy });
+}
 // API anahtarları yedeğe girmez: dosya başka yere gitse bile anahtar sızmaz.
 export function exportJSON() {
   saveNow();

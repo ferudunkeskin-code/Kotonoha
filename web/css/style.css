@@ -137,3 +137,27 @@ details.guide ol { margin: 8px 0 4px; padding-left: 22px; font-size: 15px; line-
 details.guide li { margin: 4px 0; }
 details.guide code { background: #e3eceb; padding: 1px 5px; border-radius: 4px; font-size: 14px; }
 details.guide .btn { font-size: 15px; padding: 7px 14px; }
+
+/* 🎧 konuşma modu: düşünme zamanı düğmeleri ve geri sayım */
+.vacts { display: inline-flex; gap: 6px; align-items: center; }
+.vbtn { border: 1px solid var(--line); background: white; border-radius: 999px; padding: 4px 12px; font-size: 16px; cursor: pointer; white-space: nowrap; }
+.vbtn.main { background: var(--accent2); color: white; border-color: var(--accent2); font-weight: 600; }
+.vbtn[hidden] { display: none; }
+#vbar-count { flex-basis: 100%; height: 4px; background: rgba(0,0,0,.06); border-radius: 2px; overflow: hidden; margin-top: 2px; }
+#vbar-count i { display: block; height: 100%; width: 0; background: var(--accent2); }
+#vbar.paused { background: #f3efe3; }
+
+/* yedekleme */
+.code-box { font: 600 20px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 1px;
+  background: #f1f6f5; border: 1px dashed var(--accent2); border-radius: 10px; padding: 6px 12px; display: inline-block; margin: 6px 8px 6px 0; user-select: all; }
+.card.ok { border-color: #b9d3c8; }
+.card.restore { border-color: var(--accent2); background: #f1f6f5; }
+.vlist { margin: 6px 0; }
+.vlist button { display: block; margin: 4px 0; }
+/* söylenen cümle kendi satırında tam görünsün (dar ekranda kesilmesin); düğmeler alt satıra geçer */
+#vbar-text { flex: 1 1 calc(100% - 170px); white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.4; }
+
+/* 🎤 mikrofon dili düğmesi: hedef dil ↔ Türkçe */
+#btn-sttlang { background: var(--card); border: 1px solid var(--line) !important; min-width: 58px; font-size: 15px; font-weight: 600; line-height: 1.1; padding: 0 8px !important; }
+.sttlang.is-tr { background: #fbefe9 !important; border-color: var(--accent) !important; color: var(--accent); }
+.sttlang small { display: block; font-size: 10px; font-weight: normal; color: var(--muted); }

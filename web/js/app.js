@@ -9,8 +9,9 @@ import * as speech from "./speech.js";
 import { Avatar } from "./avatar.js";
 import { LLMError, chat, cleanKey, describeKey } from "./llm.js";
 import { VoiceMode, voiceModeAvailable } from "./voicemode.js";
+import * as cloud from "./cloud.js";
 
-export const APP_VERSION = "0.4.1-web";
+export const APP_VERSION = "0.5.1-web";
 const ROOT = new URL("../", import.meta.url);      // sitenin kökü (web/), dil klasöründen bağımsız
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
@@ -22,6 +23,8 @@ const ui = {
   send: $("#btn-send"), mic: $("#btn-mic"), tr: $("#chk-tr"), furi: $("#sel-furi"),
   name: $("#char-name"), toast: $("#toast"), voice: $("#btn-voice"),
   vbar: $("#vbar"), vstate: $("#vbar-state"), vtext: $("#vbar-text"),
+  vhold: $("#vbar-hold"), vsend: $("#vbar-send"), vclear: $("#vbar-clear"), vpause: $("#vbar-pause"),
+  vrepeat: $("#vbar-repeat"), vcount: $("#vbar-count i"), sttlang: $("#btn-sttlang"), vlang: $("#vbar-lang"),
 };
 const avatar = new Avatar($("#avatar"));
 
@@ -46,7 +49,7 @@ const tl = text => pack.furigana
   ? furi.toRuby(text, S().furigana, S().furigana === "unknown" ? store.knownWords() : new Set())
   : esc(text).replace(/\n/g, "<br>");
 const TOGGLE = '<button class="toggle" data-act="tr">TR</button>';
-const FLAGS = { ja: "🇯🇵", de: "🇩🇪", en: "🇬🇧" };
+const FLAGS = { ja: "🇯🇵", de: "🇩🇪", en: "🇬🇧", tr: "🇹🇷" };
 
 function scrollBottom() { ui.main.scrollTop = ui.main.scrollHeight; }
 
@@ -76,9 +79,9 @@ function guard(fn) {
   return (...a) => { if (g === state.gen) fn(...a); };
 }
 
-function speakText(text, i, onEnd = () => {}) {
+function speakText(text, i, onEnd = () => {}, rate = Number(S().rate) || 0.9) {
   speech.speak(text, {
-    voiceName: S().voice_name, rate: Number(S().rate) || 0.9, silent: !S().voice_on,
+    voiceName: S().voice_name, rate, silent: !S().voice_on,
     onMouth: m => avatar.setMouth(m), onEnd,
   });
 }
@@ -132,8 +135,9 @@ function endSession() {
     state.summarizing = tutor.summarize(sid).catch(() => {}).then(() => {
       state.summarizing = null;
       if (state.mode === "progress") showProgress();
+      cloud.backupNow().catch(() => {});
     });
-  }
+  } else if (sid) cloud.backupNow().catch(() => {});
 }
 
 async function catchUpSummaries() {
@@ -154,8 +158,16 @@ function showHome() {
   if (!store.apiKey()) html += `<div class="card warn">Başlamak için <b>⚙️ Ayarlar</b>'dan bir API anahtarı girin.
     Anahtarın yoksa nasıl alınacağı orada adım adım anlatılıyor.
     <br><button class="btn" data-nav="settings">Ayarlara git</button><button class="btn alt" data-act="key-guide">🔑 Anahtar nasıl alınır?</button></div>`;
+  if (store.get("code_note_pending") && cloud.enabled()) html += `<div class="card ok">☁️ <b>Hafızan artık Google Drive'a
+    kendiliğinden yedekleniyor.</b> Uygulamayı silsen ya da yeni bir cihaza geçsen bile bu kodla geri yükleyebilirsin:
+    <br><span class="code-box">${esc(cloud.code())}</span>
+    <div class="hint">Kodu bir yere not et (Notlar, ekran görüntüsü…). Sonra da ⚙️ Ayarlar → Yedekleme'de görünür.</div>
+    <button class="btn" data-act="code-noted">Not ettim</button> <button class="btn alt" data-act="copy-code">📋 Kopyala</button></div>`;
+  else if (cloud.fileBackupDue()) html += `<div class="card warn">💾 <b>Son yedeğin üzerinden 7 günden fazla geçti.</b>
+    Uygulama silinirse hafıza da silinir; bir yedek al (iPad'de "Dosyalar'a Kaydet" → iCloud Drive).
+    <br><button class="btn" data-act="export">⬇ Yedeği al</button> <button class="btn alt" data-act="backup-later">Sonra</button></div>`;
   if (pack.furigana && !furi.ready()) html += `<div class="card muted">Furigana sözlüğü yükleniyor… (ilk açılışta biraz sürer)</div>`;
-  if (s.voice_on && speech.ttsAvailable() && !speech.targetVoices().length)
+  if (s.voice_on && speech.ttsAvailable() && speech.voicesKnown() && !speech.targetVoices().length)
     html += `<div class="card warn">Bu cihazda ${esc(pack.nameTr)} ses bulunamadı. iPad'de: Ayarlar → Erişilebilirlik →
       Seslendirilen İçerik → Sesler → ${esc(pack.nameTr)}.</div>`;
   if (store.sessionCount() === 0) html += `<div class="card">👋 İlk kez mi buradasın? Önce <b>serbest sohbet</b>
@@ -182,6 +194,7 @@ function showProfile(first = false) {
       ? `Burada ${esc(pack.nameTr)} konuşma pratiği yapacaksın. Önce seni biraz tanıyayım; ${esc(s.character_name)} sohbetleri buna göre ayarlar.`
       : "Bu bilgiler avatarın seninle nasıl konuşacağını belirler."}
       Bilgiler yalnızca bu cihazda saklanır; istediğin zaman ⚙️ Ayarlar'dan değiştirebilirsin.</div>
+    ${first && store.isEmpty() ? restoreCard() : ""}
     <div class="form">
       <label>Adın</label><input type="text" id="p-name" value="${esc(s.learner_name)}" autocomplete="given-name">
       <label>${esc(pack.nameTr)} seviyen <span class="hint">(${esc(pack.levelSystem)})</span></label>
@@ -196,6 +209,32 @@ function showProfile(first = false) {
     </div>`;
 }
 
+function restoreCard() {
+  return `<div class="card restore">🔄 <b>Daha önce kullandın mı?</b> Uygulamayı sildiysen ya da yeni bir cihazdaysan
+    hafızanı yedekten geri yükleyebilirsin; o zaman bu formu doldurmana gerek kalmaz.
+    ${cloud.configured() ? `<div class="form"><label>Yedek kodun</label>
+      <input type="text" id="r-code" value="${esc(cloud.code())}" placeholder="KTN-XXXX-XXXX-XXXX" autocapitalize="characters" autocorrect="off" spellcheck="false"></div>
+      <button class="btn" data-act="restore-code">☁️ Drive'dan geri yükle</button>` : ""}
+    <label class="btn alt">📂 Yedek dosyası seç<input type="file" id="r-file" accept=".json,application/json" hidden></label>
+  </div>`;
+}
+
+async function restoreWithCode() {
+  const c = cloud.normalizeCode($("#r-code")?.value);
+  if (!c) { toast("Kod KTN-XXXX-XXXX-XXXX biçiminde olmalı.", 5000); return; }
+  toast("Drive'dan alınıyor…", 8000);
+  try {
+    await cloud.restoreFrom(c);
+    applySettings();
+    toast("✅ Hafızan geri yüklendi.");
+    showHome();
+  } catch (e) {
+    if (e.notFound && confirm(`Bu kodda ${pack.nameTr} yedeği yok. Kod bu uygulamaya bağlansın mı? (Yeni başlarsın; bundan sonraki yedekler bu koda gider.)`)) {
+      store.setSetting("backup_code", c); store.saveNow(); toast("Kod bağlandı. Şimdi profilini doldur.", 5000);
+    } else if (!e.notFound) toast(e.message, 7000);
+  }
+}
+
 function saveProfile() {
   const goals = [...document.querySelectorAll('input[name="goal"]:checked')].map(i => i.value);
   store.setSetting("learner_name", $("#p-name").value.trim());
@@ -204,6 +243,7 @@ function saveProfile() {
     about: $("#p-about").value.trim().slice(0, 600), interests: $("#p-interests").value.trim().slice(0, 300),
   });
   store.setSetting("profile_done", true);
+  ensureBackupCode();
   store.saveNow();
   toast("Profil kaydedildi.");
   showHome();
@@ -329,16 +369,18 @@ function ask(text) {
 
 function onReply(d) {
   setBusy(false);
+  state.lastReply = d.reply;
   const si = addSpeak(d.reply);
   state.chat.push({ type: "ai", data: d, speak: si });
   ui.content.insertAdjacentHTML("beforeend", aiMsg(d, si));
   scrollBottom();
   speakText(d.reply, si, guard(() => vm.resume()));
+  updateVoiceButtons();
 }
 
 // ================= 🎧 konuşma modu =================
 const stateLabel = st => ({
-  listening: "🎧 Dinliyorum…", waiting: "💭",
+  listening: S().stt_tr ? "🎧 Dinliyorum (Türkçe)…" : "🎧 Dinliyorum…", waiting: "💭", paused: "⏸ Duraklatıldı — devam için ▶ ya da avatara dokun",
   sleeping: `💤 Uykuda — uyandırmak için ${pack.wakeHint(S().character_name)}`,
 }[st] || "");
 const vm = new VoiceMode({
@@ -356,6 +398,14 @@ const vm = new VoiceMode({
     ui.vstate.textContent = stateLabel(st);
     ui.vtext.textContent = st === "listening" ? detail : st === "waiting" ? (state.busy ? "düşünüyor…" : "konuşuyor…") : "";
     if (st === "off") avatar.setSleeping(false);
+    updateVoiceButtons();
+  },
+  onCountdown: ms => {
+    ui.vhold.hidden = !ms;
+    const bar = ui.vcount;
+    bar.style.transition = "none";
+    bar.style.width = ms ? "100%" : "0";
+    if (ms) { void bar.offsetWidth; bar.style.transition = `width ${ms}ms linear`; bar.style.width = "0"; }
   },
   onSleep: () => {
     speech.stop();
@@ -369,6 +419,52 @@ const vm = new VoiceMode({
   onError: msg => toast(msg, 6000),
   wakeWords: () => pack.wakeWords(S().character_name),
 });
+
+// ---- 🎤 mikrofon dili: hedef dil ↔ Türkçe ----
+// Konuşma tanıma aynı anda tek dil dinler; Türkçe konuşmak için bu düğmeyle Türkçeye geçilir.
+// Avatar yine hedef dilde cevap verir. Seçim cihazda hatırlanır.
+const sttLocale = () => S().stt_tr ? "tr-TR" : pack.locale;
+function updateSttLang() {
+  const tr = !!S().stt_tr;
+  const code = tr ? "tr" : pack.code;
+  const label = `${FLAGS[code] || ""}<small>${tr ? "TR" : pack.code.toUpperCase()}</small>`;
+  for (const b of [ui.sttlang, ui.vlang]) {
+    b.innerHTML = label;
+    b.classList.toggle("is-tr", tr);
+    b.title = tr ? `Mikrofon Türkçe dinliyor — yeniden ${pack.nameTr} dinlemesi için dokun` : `Mikrofon ${pack.nameTr} dinliyor — Türkçe konuşmak için dokun`;
+  }
+}
+function toggleSttLang() {
+  store.setSetting("stt_tr", !S().stt_tr);
+  store.saveNow();
+  updateSttLang();
+  vm.setLang(sttLocale());
+  if (state.stopListen) { stopListening(); toast("Mikrofon dili değişti; 🎤'ya yeniden bas.", 3000); return; }
+  if (vm.state === "listening") ui.vstate.textContent = stateLabel("listening");
+  toast(S().stt_tr
+    ? `🇹🇷 Mikrofon artık Türkçe dinliyor. ${S().character_name} yine ${pack.nameTr} cevap verir. Geri dönmek için düğmeye yeniden dokun.`
+    : `${FLAGS[pack.code] || ""} Mikrofon yeniden ${pack.nameTr} dinliyor.`, 5000);
+}
+
+function updateVoiceButtons() {
+  const st = vm.state;
+  const hasText = st === "listening" && !!vm.text;
+  ui.vsend.hidden = !(hasText && (vm.manual || vm.holding));
+  ui.vclear.hidden = !hasText;
+  if (vm.holding || vm.manual || !hasText) ui.vhold.hidden = true;
+  ui.vpause.textContent = st === "paused" ? "▶ Devam" : "⏸";
+  ui.vpause.hidden = st === "sleeping";
+  ui.vrepeat.hidden = !state.lastReply || st === "sleeping";
+}
+
+// 🔁 Son cevabı biraz daha yavaş tekrarla; bitince (duraklatılmamışsa) dinlemeye dön.
+function repeatLast() {
+  if (!state.lastReply) return;
+  const slow = Math.max(0.6, (Number(S().rate) || 0.9) * 0.85);
+  const wasListening = vm.state === "listening";
+  if (wasListening) vm.pause();
+  speakText(state.lastReply, -1, () => { if (wasListening) vm.resume(200); }, slow);
+}
 
 // ---- hız ve sıra geçme süresi: anında kaydedilir, bir sonraki açılışta hatırlanır ----
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -393,6 +489,17 @@ function showVoiceSettings() {
   if ($("#f-rate-v")) { $("#f-rate-v").textContent = Number(s.rate).toFixed(2); $("#f-rate").value = s.rate; }
 }
 ui.vbar.addEventListener("click", e => {
+  const b = e.target.closest("button");
+  if (b === ui.vlang) { toggleSttLang(); return; }
+  if (b === ui.vhold) { vm.hold(); toast("✋ Acele yok. Konuşmaya devam et; bitince ➤ Gönder'e bas.", 4000); return; }
+  if (b === ui.vsend) { vm.send(); return; }
+  if (b === ui.vclear) { vm.clearText(); return; }
+  if (b === ui.vrepeat) { repeatLast(); return; }
+  if (b === ui.vpause) {
+    if (vm.state === "paused") vm.unpause();
+    else { speech.stop(); vm.pauseByUser(); }
+    return;
+  }
   const c = e.target.closest("[data-vctl]")?.dataset.vctl;
   if (!c) return;
   if (c === "wait-") setWait(S().silence_ms - 200);
@@ -410,10 +517,14 @@ function toggleVoice() {
   stopListening();
   speech.unlock();
   vm.silenceMs = Number(S().silence_ms) || 1400;
+  vm.manual = S().voice_send === "manual";
+  vm.lang = sttLocale();
   showVoiceSettings();
   vm.start();
   if (state.busy) vm.pause();     // cevap bekleniyorsa, cevaptan sonra dinlemeye başlar
-  toast(`🎧 Konuşma modu açık. Konuş; kısa bir sessizlikten sonra kendiliğinden gönderilir. Uyutmak için ${pack.sleepHint}.`, 7000);
+  toast(vm.manual
+    ? `🎧 Konuşma modu açık. Konuş, bitince ➤ Gönder'e bas. ⏸ ile duraklatabilirsin. Uyutmak için ${pack.sleepHint}.`
+    : `🎧 Konuşma modu açık. Konuş; kısa bir sessizlikten sonra gönderilir. Düşünmek için ✋ Bekle'ye bas. Uyutmak için ${pack.sleepHint}.`, 8000);
 }
 
 // ================= mikrofon =================
@@ -433,8 +544,9 @@ function toggleMic() {
   const base = ui.input.value.trim();
   ui.mic.classList.add("rec");
   ui.mic.textContent = "⏹";
-  toast("🎤 Dinliyorum… Bitince ⏹'e bas.");
+  toast(S().stt_tr ? "🎤 Türkçe dinliyorum… Bitince ⏹'e bas." : "🎤 Dinliyorum… Bitince ⏹'e bas.");
   state.stopListen = speech.listen({
+    lang: sttLocale(),
     onText: (t, final) => {
       ui.input.value = (base ? base + " " : "") + t;
       if (final && t) toast("Yazıyı kontrol et, sonra Gönder.", 4000);
@@ -555,14 +667,22 @@ function showSettings(guideOpen = null) {
     <input type="range" id="f-wait" min="0.6" max="4" step="0.2" value="${s.silence_ms / 1000}" style="width:100%">
     <div class="hint">Sustuktan kaç saniye sonra söylediğin gönderilsin. Kısa: hızlı karşılıklı konuşma; uzun: düşünmek için zaman. Varsayılan 1.4 sn.
       Hız ve süre değiştirdiğin anda kaydedilir; konuşma modundaki ⏱ ve 🗣 düğmeleriyle de ayarlanabilir.</div>
+    <label>🎧 Konuşma modunda söylediğim ne zaman gönderilsin?</label>
+    <select id="f-vsend">
+      <option value="auto" ${s.voice_send !== "manual" ? "selected" : ""}>Kısa bir sessizlikten sonra kendiliğinden (✋ Bekle ile durdurabilirim)</option>
+      <option value="manual" ${s.voice_send === "manual" ? "selected" : ""}>Ben ➤ Gönder'e basınca (düşünmek için bol zaman)</option>
+    </select>
+    <div class="hint">Konuşma modunda: ⏸ duraklat · 🔁 son cümleyi yavaşça tekrarla · ✋ Bekle (geri sayımı durdurur) ·
+      🗑 söylediğini sil. "えーと / ähm / um" gibi duraksama sözcükleriyle biterse kendiliğinden daha uzun beklenir.</div>
     <button class="btn alt" data-act="test-voice">▶ Dene</button>
-    ${voices.length ? "" : `<div class="hint">${esc(pack.nameTr)} ses bulunamadı. iPad: Ayarlar → Erişilebilirlik → Seslendirilen İçerik → Sesler → ${esc(pack.nameTr)}.</div>`}
+    ${voices.length || !speech.voicesKnown() ? "" : `<div class="hint">${esc(pack.nameTr)} ses bulunamadı. iPad: Ayarlar → Erişilebilirlik → Seslendirilen İçerik → Sesler → ${esc(pack.nameTr)}.</div>`}
   </div>
-  <div class="card"><b>Yedekleme</b>
-    <div class="hint">Hafıza ve kelime ilerlemesi yalnızca bu cihazda durur. Ara sıra yedek alın.
-      Her dilin yedeği ayrıdır.</div>
-    <button class="btn alt" data-act="export">⬇ Yedeği indir</button>
-    <label class="btn alt" style="margin-top:6px">⬆ Yedekten geri yükle<input type="file" id="f-import" accept=".json,application/json" hidden></label>
+  <div class="card" id="backup-card"><b>Yedekleme</b>
+    ${cloudBlock()}
+    <div class="hint" style="margin-top:10px"><b>Dosyaya yedek</b> (Drive'dan bağımsız; iPad'de "Dosyalar'a Kaydet" → iCloud Drive).
+      Her dilin yedeği ayrıdır; API anahtarı yedeğe girmez.</div>
+    <button class="btn alt" data-act="export">⬇ Yedeği dosyaya al</button>
+    <label class="btn alt" style="margin-top:6px">⬆ Dosyadan geri yükle<input type="file" id="f-import" accept=".json,application/json" hidden></label>
   </div>
   <button class="btn warm" data-act="save-settings">Kaydet</button>
   <div class="card"><b>Diğer diller</b>
@@ -579,7 +699,103 @@ function showSettings(guideOpen = null) {
   $("#f-wait").oninput = e => setWait(Number(e.target.value) * 1000);
   $("#f-vname").onchange = e => store.setSetting("voice_name", e.target.value);
   $("#f-voice").onchange = e => store.setSetting("voice_on", e.target.checked);
+  $("#f-vsend").onchange = e => { store.setSetting("voice_send", e.target.value); vm.manual = e.target.value === "manual"; store.saveNow(); };
   $("#f-import").onchange = importBackup;
+}
+
+// ---------- ☁️ Drive yedeği ----------
+const fmtTime = iso => iso ? new Date(iso).toLocaleString("tr-TR", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : "henüz yok";
+
+function cloudBlock() {
+  if (!cloud.configured()) return `<div class="hint">☁️ Google Drive yedeği bu sitede henüz kurulmadı.</div>`;
+  if (!cloud.enabled()) return `<div>☁️ <b>Google Drive'a otomatik yedek: kapalı</b></div>
+    <div class="hint">Açınca hafızan arka planda Drive'a yedeklenir; uygulama silinse bile bir kodla geri gelir.</div>
+    <button class="btn" data-act="cloud-on">☁️ Drive yedeğini aç</button>
+    <button class="btn alt" data-act="cloud-link">🔗 Kodum var, bağla</button>
+    <div id="cloud-extra"></div>`;
+  const st = cloud.status();
+  return `<div>☁️ <b>Google Drive'a otomatik yedek: açık</b></div>
+    <div class="hint">Son yedek: ${esc(fmtTime(st.last_at))}${st.last_error ? ` · ⚠️ ${esc(st.last_error)}` : st.last_at ? " ✓" : ""}</div>
+    <div class="hint" style="margin-top:6px">Yedek kodun (uygulamayı silersen ya da yeni cihazda bununla geri yüklersin; diğer dil simgelerinde de aynı kodu kullan):</div>
+    <span class="code-box">${esc(cloud.code())}</span><button class="btn alt" data-act="copy-code">📋 Kopyala</button>
+    <div>
+      <button class="btn" data-act="cloud-now">⬆ Şimdi yedekle</button>
+      <button class="btn alt" data-act="cloud-restore">⬇ Drive'dan geri yükle</button>
+      <button class="btn alt" data-act="cloud-link">🔗 Başka kod bağla</button>
+      <button class="btn alt" data-act="cloud-off">Kapat</button>
+    </div>
+    <div id="cloud-extra"></div>
+    <div class="hint">Yedekler Kotonoha yöneticisinin Google Drive'ında, "Kotonoha Yedekleri" klasöründe saklanır; son 10 günün kopyası tutulur.</div>`;
+}
+
+function ensureBackupCode() {
+  // Drive kuruluysa ve hafızada bir şey varsa yedeği kendiliğinden aç (kodu kullanıcıya bir kez göster).
+  if (cloud.configured() && !cloud.code() && !store.isEmpty()) {
+    store.setSetting("backup_code", cloud.newCode());
+    store.set("code_note_pending", true);
+    store.saveNow();
+  }
+}
+
+function copyCode() {
+  const c = cloud.code();
+  navigator.clipboard?.writeText(c).then(() => toast("Kod kopyalandı: " + c), () => toast(c, 8000));
+}
+
+async function cloudNow() {
+  toast("Drive'a yedekleniyor…", 8000);
+  try { await cloud.backupNow({ force: true }); toast("✅ Drive'a yedeklendi."); }
+  catch (e) { toast("⚠️ " + e.message, 7000); }
+  if (state.mode === "settings") showSettings();
+}
+
+function cloudLinkForm() {
+  $("#cloud-extra").innerHTML = `<div class="form"><label>Yedek kodun</label>
+    <input type="text" id="c-code" placeholder="KTN-XXXX-XXXX-XXXX" autocapitalize="characters" autocorrect="off" spellcheck="false">
+    <button class="btn" data-act="cloud-link-go">Bağla</button></div>`;
+}
+
+async function cloudLinkGo() {
+  const c = cloud.normalizeCode($("#c-code").value);
+  if (!c) { toast("Kod KTN-XXXX-XXXX-XXXX biçiminde olmalı.", 5000); return; }
+  try {
+    const files = await cloud.list(c);
+    if (files.length && confirm(`Bu kodda ${pack.nameTr} yedeği var (${fmtTime(files[0].updated)}). Bu cihazdaki hafıza onunla değiştirilsin mi?\n(Hayır dersen kod yine bağlanır; bundan sonraki yedekler oraya gider.)`)) {
+      await cloud.restoreFrom(c);
+      applySettings();
+      toast("✅ Drive'daki yedek yüklendi.");
+    } else {
+      store.setSetting("backup_code", c); store.saveNow();
+      cloud.backupNow({ force: true }).catch(() => {});
+      toast("Kod bağlandı.");
+    }
+  } catch (e) {
+    if (e.notFound) { store.setSetting("backup_code", c); store.saveNow(); cloud.backupNow({ force: true }).catch(() => {}); toast("Kod bağlandı (bu kodda henüz yedek yoktu)."); }
+    else { toast("⚠️ " + e.message, 7000); return; }
+  }
+  showSettings();
+}
+
+async function cloudRestoreList() {
+  const box = $("#cloud-extra");
+  box.innerHTML = '<div class="hint">Drive\'daki yedekler alınıyor…</div>';
+  try {
+    const files = await cloud.list();
+    if (!files.length) { box.innerHTML = '<div class="hint">Drive\'da bu dilde yedek yok.</div>'; return; }
+    box.innerHTML = `<div class="hint">Hangi yedeğe dönülsün? (Bu cihazdaki hafıza onunla değiştirilir.)</div><div class="vlist">` +
+      files.map(f => `<button class="btn alt" data-act="cloud-load" data-file="${esc(f.name)}">${f.name.includes("-son") ? "En son yedek" : esc(f.name.slice(3, 13))} · ${esc(fmtTime(f.updated))} · ${Math.round(f.size / 1024)} KB</button>`).join("") + "</div>";
+  } catch (e) { box.innerHTML = `<div class="hint">⚠️ ${esc(e.message)}</div>`; }
+}
+
+async function cloudLoad(file) {
+  if (!confirm(`Bu cihazdaki ${pack.nameTr} hafızası seçtiğin Drive yedeğiyle değiştirilsin mi?`)) return;
+  try { await cloud.restoreFrom(cloud.code(), file); applySettings(); toast("✅ Yedek yüklendi."); showSettings(); }
+  catch (e) { toast("⚠️ " + e.message, 7000); }
+}
+
+function cloudOff() {
+  if (!confirm(`Drive yedeği bu uygulamada kapatılsın mı? (Drive'daki eski yedekler silinmez; kodunla yeniden bağlayabilirsin: ${cloud.code()})`)) return;
+  store.setSetting("backup_code", ""); store.saveNow(); showSettings();
 }
 
 function readSettingsForm() {
@@ -624,25 +840,37 @@ function testVoice() {
   });
 }
 
-function exportBackup() {
+async function exportBackup() {
+  const name = `kotonoha-${pack.code}-yedek-${new Date().toISOString().slice(0, 10)}.json`;
   const blob = new Blob([store.exportJSON()], { type: "application/json" });
+  // iPad: paylaşım menüsü → "Dosyalar'a Kaydet" (iCloud Drive). Bilgisayar: İndirilenler.
+  const file = typeof File !== "undefined" ? new File([blob], name, { type: "application/json" }) : null;
+  if (file && navigator.canShare?.({ files: [file] }) && /iPad|iPhone|Macintosh/.test(navigator.userAgent) && "ontouchend" in document) {
+    try { await navigator.share({ files: [file], title: name }); cloud.markFileBackup(); refreshAfterBackup(); return; }
+    catch (e) { if (e.name === "AbortError") return; /* paylaşım olmazsa indirmeye düş */ }
+  }
+  cloud.markFileBackup();
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `kotonoha-${pack.code}-yedek-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = name;
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  refreshAfterBackup();
 }
+function refreshAfterBackup() { if (state.mode === "home") showHome(); }
 
 function importBackup(e) {
   const file = e.target.files?.[0];
   if (!file) return;
-  if (!confirm(`Bu cihazdaki ${pack.nameTr} hafızası, yedekteki ile değiştirilsin mi?`)) return;
+  if (!store.isEmpty() && !confirm(`Bu cihazdaki ${pack.nameTr} hafızası, yedekteki ile değiştirilsin mi?`)) return;
+  const fromProfile = e.target.id === "r-file";
   file.text().then(t => {
     store.importJSON(t);
+    ensureBackupCode();
     applySettings();
-    toast("Yedek geri yüklendi.");
-    showSettings();
+    toast("✅ Yedek geri yüklendi.");
+    if (fromProfile) showHome(); else showSettings();
   }).catch(err => toast("Yedek okunamadı: " + err.message, 6000));
 }
 
@@ -655,6 +883,7 @@ function applySettings() {
 }
 
 // ================= olaylar =================
+ui.content.addEventListener("change", e => { if (e.target.id === "r-file") importBackup(e); });
 ui.content.addEventListener("click", e => {
   const t = e.target.closest("[data-act],[data-nav]");
   if (!t) return;
@@ -672,6 +901,17 @@ ui.content.addEventListener("click", e => {
   else if (act === "profile") showProfile(false);
   else if (act === "profile-save") saveProfile();
   else if (act === "key-guide") openKeyGuide();
+  else if (act === "code-noted") { store.set("code_note_pending", false); showHome(); }
+  else if (act === "copy-code") copyCode();
+  else if (act === "backup-later") { cloud.snoozeFileBackup(); showHome(); }
+  else if (act === "restore-code") restoreWithCode();
+  else if (act === "cloud-on") { store.setSetting("backup_code", cloud.newCode()); store.set("code_note_pending", true); store.saveNow(); cloudNow(); }
+  else if (act === "cloud-link") cloudLinkForm();
+  else if (act === "cloud-link-go") cloudLinkGo();
+  else if (act === "cloud-now") cloudNow();
+  else if (act === "cloud-restore") cloudRestoreList();
+  else if (act === "cloud-load") cloudLoad(t.dataset.file);
+  else if (act === "cloud-off") cloudOff();
 });
 
 function go(nav) {
@@ -688,10 +928,12 @@ ui.voice.addEventListener("click", toggleVoice);
 $("#vbar-off").addEventListener("click", () => { vm.stop(); speech.stop(); });
 // Avatar konuşurken avatara dokunmak: sustur ve dinlemeye geç
 $("#avatar").addEventListener("click", () => {
-  if (vm.state === "waiting" && !state.busy) { speech.stop(); vm.resume(100); }
+  if (vm.state === "paused") vm.unpause();
+  else if (vm.state === "waiting" && !state.busy) { speech.stop(); vm.resume(100); }
   else if (vm.state === "sleeping") { speech.stop(); vm.wake(); }
 });
 ui.mic.addEventListener("click", toggleMic);
+ui.sttlang.addEventListener("click", toggleSttLang);
 ui.input.addEventListener("keydown", e => {
   // Japonca klavyede dönüşüm sırasında Enter göndermesin
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); send(); }
@@ -710,7 +952,12 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) store
 
 // ================= başlangıç =================
 applySettings();
+updateSttLang();
+ensureBackupCode();             // 0.4 → 0.5: mevcut kullanıcıda Drive yedeği kendiliğinden açılır
 if (S().profile_done) showHome(); else showProfile(true);
+cloud.startAuto();
+// iPad ses listesini açılıştan biraz sonra verir: gelince ana sayfadaki ses uyarısını yeniden değerlendir.
+speech.voicesReady(4000).then(() => { if (state.mode === "home") showHome(); });
 store.requestPersist();
 if (pack.furigana) {
   furi.init().then(t => {
