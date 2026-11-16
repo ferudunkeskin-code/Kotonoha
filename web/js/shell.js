@@ -20,6 +20,7 @@ export function buildShell(pack) {
       <nav id="nav">
         <button data-nav="home">🏠<span>Ana sayfa</span></button>
         <button data-nav="free">💬<span>Serbest sohbet</span></button>
+        <button data-nav="units">📘<span>Üniteler</span></button>
         <button data-nav="text">📄<span>Metinle çalış</span></button>
         <button data-nav="progress">📈<span>İlerleme</span></button>
         <button data-nav="settings">⚙️<span>Ayarlar</span></button>

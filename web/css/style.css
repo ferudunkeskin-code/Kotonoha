@@ -125,7 +125,7 @@ th { font-size: 13px; color: var(--muted); }
 }
 @media (max-width: 560px) {
   #nav button span { display: none; }
-  #nav { grid-template-columns: repeat(5, 1fr); }
+  #nav { grid-template-columns: repeat(6, 1fr); }
   #nav button { justify-content: center; font-size: 22px; }
   .avatar-wrap { height: 130px; }
 }
@@ -162,3 +162,39 @@ details.guide .btn { font-size: 15px; padding: 7px 14px; }
 .sttlang.is-tr { background: #fbefe9 !important; border-color: var(--accent) !important; color: var(--accent); }
 .sttlang small { display: block; font-size: 10px; font-weight: normal; color: var(--muted); }
 .card.start-hint { border-style: dashed; color: var(--muted); }
+.diag { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; background: #f4f1ea; padding: 8px; border-radius: 8px; white-space: pre-wrap; max-height: 260px; overflow: auto; }
+
+/* 📘 üniteler */
+.unit-list { display: flex; flex-direction: column; gap: 8px; }
+.unit-row { display: flex; align-items: center; gap: 12px; text-align: left; padding: 10px 14px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--card); cursor: pointer; width: 100%; }
+.unit-row.next { border-color: var(--accent2); background: #eef4f3; }
+.unit-row .u-mark { font-size: 20px; width: 28px; text-align: center; }
+.unit-row .u-title { flex: 1; min-width: 0; line-height: 1.45; }
+.unit-row .u-prog { color: var(--muted); font-size: 14px; white-space: nowrap; }
+.tl-s { font-weight: 600; }
+.steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+.step-pill { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 4px 12px; font-size: 14px; cursor: pointer; }
+.step-pill.done { background: #dbe7e5; }
+.step-pill.on { outline: 2px solid var(--accent2); }
+.step-pill:disabled { opacity: .5; }
+.linkish { border: 0; background: none; padding: 0; color: var(--accent2); font: inherit; cursor: pointer; text-decoration: underline; }
+.line { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.line:last-child { border-bottom: 0; }
+.line .who { min-width: 78px; color: var(--accent2); font-weight: 600; font-size: 14px; padding-top: 8px; }
+.line .ln { flex: 1; min-width: 0; }
+.card.vocab { overflow-x: auto; }
+.card.vocab td { font-size: 15px; }
+.tl-ex { font-size: 16px; }
+.opt { display: block; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px 14px; margin: 8px 0; font-size: 18px; cursor: pointer; color: var(--ink); }
+.opt.right { border-color: var(--ok); background: #eef5ec; }
+.opt.wrong { border-color: var(--bad); background: #fbefe9; }
+.opt:disabled { cursor: default; }
+.big { font-size: 44px; text-align: center; margin: 12px 0 4px; line-height: 1.5; }
+/* 🔁 kelime tekrarı */
+.rv-card { text-align: center; }
+.rv-word { font-size: 44px; margin: 14px 0 6px; line-height: 1.4; }
+.rv-read { font-size: 20px; }
+.rv-mean { font-size: 19px; margin: 6px 0; }
+.rv-btns { margin-top: 12px; }

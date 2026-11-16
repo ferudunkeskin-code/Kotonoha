@@ -62,8 +62,12 @@ CEVAP BİÇİMİ: Yalnızca aşağıdaki JSON nesnesini döndür, başka hiçbir
       "category": "${P.categories}"
   },
   "new_words": [ {"word": "...", "reading": "${P.reading}", "meaning_tr": "..."} ]  (en fazla 2, yalnızca öğrenci için yeni olabilecek kelimeler),
-  "goal_reached": false
+  "goal_reached": false,
+  "open_unit": null
 }
+"open_unit": yalnızca öğrenci açıkça bir üniteye geçmek/bir üniteyi çalışmak isterse (ör. "konbini ünitesine
+geçelim") o ünitenin kimliği (ör. "L1-04", ünite listesi aşağıda); uygulama ona bir "Üniteye git" düğmesi gösterir.
+Aksi hâlde null.
 ${P.wordHint}
 TÜRKÇE MESAJLAR: Öğrenci Türkçe yazabilir ya da konuşabilir. Bu genellikle bir istek, soru ya da
 anlatamadığı bir şeyi açıklamasıdır (ör. "şimdi seninle yeni bir tanışma çalışması yapalım, sen başla",
@@ -144,4 +148,80 @@ Yalnızca şu JSON'u döndür:
   "level_estimate": "${pack.levels.map(l => l[0]).join(" | ")} veya emin değilsen null"
 }
 "facts" yalnızca öğrencinin kendi söylediklerine dayansın; sağlık, aile sorunları gibi özel konuları yazma.
+`;
+
+// ---------- 📘 Üniteler ----------
+const unitTitle = u => `${u.title} / ${u.title_tr}`;
+
+export const UNIT_GEN = ({ u, level, profile, mistakes }) => `Bir ${L} dersi ünitesi hazırla. Öğrencinin ana dili Türkçe; açıklamalar Türkçe olacak.
+
+Ünite: ${unitTitle(u)}  ·  Seviye: ${u.band} (${pack.levelSystem})
+Sahne: ${u.scenario_tr}
+Kazanım: ${u.can_do_tr}
+Hedef dilbilgisi: ${u.grammar.join(" · ")}
+Öğrencinin seviyesi: ${level}
+Öğrencinin profili:
+${profileBlock(profile)}
+Öğrencinin sık yaptığı hatalar: ${mistakes}
+
+İçeriği öğrencinin hedeflerine ve ilgi alanlarına uygun, gerçekçi ve doğal ${L} ile hazırla.
+Yalnızca şu yapıda geçerli bir JSON döndür (açıklama ya da \`\`\` yazma):
+{
+  "scene": {
+    "setting_tr": "sahnenin kısa Türkçe tarifi",
+    "characters": [{"id": "A", "name": "${L} bir isim", "role_tr": "..."}, {"id": "B", "name": "...", "role_tr": "..."}],
+    "lines": [{"speaker": "A", "text": "${L} replik", "tr": "Türkçesi"}]
+  },
+  "vocab": [{"word": "...", "reading": "${P.reading}", "meaning_tr": "...", "example": "${L} örnek cümle", "example_tr": "..."}],
+  "grammar": {
+    "point": "dilbilgisi noktalarının kısa adı",
+    "explanation_tr": "Türkçe açıklama (3-6 paragraf; kullanım farkları ve Türklerin sık yaptığı hatalar dahil). Paragrafları \\n\\n ile ayır.",
+    "examples": [{"text": "${L} örnek", "tr": "Türkçesi"}]
+  },
+  "roleplay": {
+    "partner_name": "${L} bir isim", "partner_role_tr": "...", "learner_role_tr": "...",
+    "goal_tr": "öğrencinin tamamlaması gereken somut görev", "opening": "karşıdaki kişinin ${L} açılış repliği"
+  },
+  "writing": {"task_tr": "kısa yazma görevi", "hint_tr": "ipucu"},
+  "quiz": [{"q_tr": "Türkçe soru", "q": "varsa ${L} cümle (boşluk için ＿＿), yoksa boş", "options": ["...", "...", "...", "..."], "answer": 0, "explain_tr": "..."}]
+}
+Kurallar: sahne 10-14 replik; vocab 10 kelime; grammar.examples 4-6; quiz 6 soru (dilbilgisi, kelime ve sahneyi
+anlama karışık; "answer" doğru şıkkın 0'dan başlayan sırası; doğru şıkkın yeri sorudan soruya değişsin).
+${P.wordHint}
+`;
+
+export const ROLEPLAY = (u, rp) => `MOD: Rol yapma (ünite: ${unitTitle(u)}).
+Sahne: ${u.scenario_tr}
+Sen şu rolü oynuyorsun: ${rp.partner_role_tr} (adın: ${rp.partner_name}).
+Öğrencinin rolü: ${rp.learner_role_tr}
+Görev: ${rp.goal_tr}
+Rolünden çıkma; gerçek hayatta bu kişi nasıl konuşursa öyle, ${L} konuş. Cümlelerin kısa ve öğrencinin seviyesine uygun olsun.
+Hedef dilbilgisi: ${u.grammar.join(" · ")}. Öğrenciyi bu yapıları kullanmaya yönlendir.
+Öğrenci takılırsa reply_tr'de Türkçe kısa bir ipucu ver (ne söyleyebileceğini).
+Öğrenci görevi başarıyla tamamladığında "goal_reached": true yap ve sahneyi doğal biçimde kapat.
+`;
+
+export const LESSON_QA = (u, stepName, point) => `MOD: Ders içi soru-cevap (ünite: ${unitTitle(u)}, adım: ${stepName}).
+Dilbilgisi noktası: ${point}
+Öğrenci bu dersle ilgili soru soruyor veya örnek cümle deniyor. Açıklamaları "reply_tr" alanında Türkçe ve
+ayrıntılı ver; "reply" alanında kısa ${L} örnekler kullan. Öğrencinin denediği cümleyi "correction" ile düzelt.
+`;
+
+export const WRITING_CHECK = (u, task, text) => `Öğrencinin ${L} yazma görevini değerlendir.
+Görev: ${task}
+Hedef dilbilgisi: ${u.grammar.join(" · ")}
+
+Öğrencinin metni:
+<<<METİN
+${text}
+METİN>>>
+
+Yalnızca şu JSON'u döndür:
+{
+  "corrected": "metnin düzeltilmiş, doğal hâli",
+  "comments": [{"original": "...", "corrected": "...", "explanation_tr": "...", "category": "${P.categories}"}],
+  "praise_tr": "iyi yaptığı şeyler (1-2 cümle)",
+  "score": 0.0-1.0 arası genel puan
+}
+En fazla 5 yorum yaz; önemli olanlara odaklan.
 `;

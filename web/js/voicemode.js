@@ -16,7 +16,7 @@
 // Uyku ve uyanma sözleri dil paketinden gelir (ja: おやすみ / ねえ、コトノハ;
 // de: Gute Nacht / Hallo <ad>; en: Good night / Hey <ad>). Mikrofon hedef dili dinler.
 import { pack } from "./lang/index.js";
-import { joinTranscripts } from "./speech.js";
+import { joinTranscripts, noteMicUsed } from "./speech.js";
 
 const Rec = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 
@@ -253,6 +253,7 @@ export class VoiceMode {
   _stopRec() {
     const r = this.rec;
     this.rec = null;
+    if (r) noteMicUsed();
     if (r) { try { r.abort(); } catch (e) { /* */ } }
   }
 

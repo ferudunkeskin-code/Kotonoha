@@ -10,8 +10,10 @@ import { Avatar } from "./avatar.js";
 import { LLMError, chat, cleanKey, describeKey } from "./llm.js";
 import { VoiceMode, voiceModeAvailable } from "./voicemode.js";
 import * as cloud from "./cloud.js";
+import * as cur from "./curriculum.js";
+import * as P from "./prompts.js";
 
-export const APP_VERSION = "0.5.2-web";
+export const APP_VERSION = "0.6.0-web";
 const ROOT = new URL("../", import.meta.url);      // sitenin kökü (web/), dil klasöründen bağımsız
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
@@ -79,14 +81,18 @@ function guard(fn) {
   return (...a) => { if (g === state.gen) fn(...a); };
 }
 
-function speakText(text, i, onEnd = () => {}, rate = Number(S().rate) || 0.9) {
+function speakText(text, i, onEnd = () => {}, rate = Number(S().rate) || 0.9, pitch = 1) {
   speech.speak(text, {
-    voiceName: S().voice_name, rate, silent: !S().voice_on,
+    voiceName: S().voice_name, rate, pitch, silent: !S().voice_on,
     onMouth: m => avatar.setMouth(m), onEnd,
   });
 }
 
-function addSpeak(text) { state.speak.push(text); return state.speak.length - 1; }
+function addSpeak(text, pitch = 1) {
+  state.speak.push(text);
+  (state.speakPitch ||= [])[state.speak.length - 1] = pitch;
+  return state.speak.length - 1;
+}
 
 function errorCard(msg, guide = false) {
   return `<div class="card warn">⚠️ ${esc(msg)}${guide ? '<br><button class="btn alt" data-act="key-guide">🔑 Anahtar nasıl alınır?</button>' : ""}</div>`;
@@ -121,9 +127,13 @@ function setMode(mode, title) {
   state.task = null;
   state.chat = [];
   state.speak = [];
+  state.speakPitch = [];
+  state.playTok = null;
   ui.title.textContent = title;
-  document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.nav === mode));
+  const navOf = { unit: "units", review: "units" }[mode] || mode;
+  document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.nav === navOf));
   setInput(mode === "free" || mode === "home");
+  if (ui.input.disabled) ui.input.placeholder = "";
   ui.main.scrollTop = 0;
 }
 
@@ -174,8 +184,15 @@ function showHome() {
   html += `<div class="card">💬 <b>Hemen konuşmaya başla:</b> aşağıya yaz, 🎤 ile söyle ya da 🎧 ile sesli sohbete geç.
     İlk sözü sen söylersin; Türkçe de olur (ör. „Merhaba, bugün nasılsın?“ ya da „Dünkü konuya devam edelim“).
     ${store.sessionCount() === 0 ? '<div class="muted">İlk kez buradasın: birkaç mesajda seviyeni anlarım.</div>' : ""}</div>`;
-  html += `<div class="card">📘 <b>Üniteler</b> ve 🔁 <b>kelime tekrarı</b> bir sonraki sürümde geliyor.
-    <div class="muted">Şimdilik sohbette öğrenilen kelimeler biriktiriliyor: ${stats.total} kelime.</div></div>`;
+  const nx = cur.nextUnit(store.completedUnits());
+  if (nx) {
+    const u = cur.unit(nx);
+    html += `<div class="card">📘 <b>Sıradaki ünite:</b> <span class="tl-s">${tl(u.title)}</span> · ${esc(u.title_tr)}
+      <div class="muted">${esc(u.scenario_tr)}</div>
+      <button class="btn" data-act="unit" data-unit="${nx}">Üniteye git</button> <button class="btn alt" data-nav="units">Tüm üniteler</button></div>`;
+  }
+  if (stats.due) html += `<div class="card">🔁 Tekrar bekleyen kelime: <b>${stats.due}</b> (toplam ${stats.total})
+    <button class="btn alt" data-act="review">Kelime tekrarı</button></div>`;
   if (level) html += `<div class="muted">Tahmini seviye: ${esc(level)}</div>`;
   ui.content.innerHTML = html;
 }
@@ -329,7 +346,8 @@ function startText(text, kind) {
 
 function renderChat() {
   let html = (state.header || freeHeader)();
-  for (const item of state.chat) html += item.type === "user" ? userMsg(item.text, item.spoken) : aiMsg(item.data, item.speak);
+  for (const item of state.chat) html += item.type === "user" ? userMsg(item.text, item.spoken)
+    : item.type === "html" ? item.html : aiMsg(item.data, item.speak);
   ui.content.innerHTML = html;
   if (state.busy) setBusy(true);
   scrollBottom();
@@ -356,7 +374,9 @@ function aiMsg(d, si) {
   if (nw.length) words = `<div class="muted" style="margin-top:6px">Yeni: ` + nw.map(wordPill).join(" ") + "</div>";
   return `<div class="msg ai"><div class="b"><span class="tl">${tl(d.reply)}</span>
     <button class="icon" data-act="say" data-i="${si}" title="Seslendir">🔊</button>${tr}${fix}${words}
-    ${final ? '<div><button class="btn warm" data-act="text-again">🔁 Yeniden prova</button><button class="btn alt" data-nav="text">✏️ Başka metin</button></div>' : ""}</div></div>`;
+    ${final ? '<div><button class="btn warm" data-act="text-again">🔁 Yeniden prova</button><button class="btn alt" data-nav="text">✏️ Başka metin</button></div>' : ""}
+    ${d.goal_reached && state.mode === "unit" ? `<div class="card ok">🎉 Görevi başardın!</div>${nextBtn()}` : ""}
+    ${d.open_unit && cur.unit(d.open_unit) ? `<div><button class="btn" data-act="unit" data-unit="${d.open_unit}">📘 ${esc(cur.unit(d.open_unit).title_tr)} ünitesine git</button></div>` : ""}</div></div>`;
 }
 
 function send() {
@@ -373,7 +393,8 @@ function sendText(text) {
   state.chat.push({ type: "user", text });
   ui.content.insertAdjacentHTML("beforeend", userMsg(text));
   scrollBottom();
-  ask(text);
+  if (state.mode === "unit" && state.step === "writing") writingCheck(text);
+  else ask(text);
 }
 
 function ask(text) {
@@ -387,6 +408,7 @@ function ask(text) {
 function onReply(d) {
   setBusy(false);
   state.lastReply = d.reply;
+  if (d.goal_reached && state.mode === "unit" && state.step === "roleplay") store.markStep(state.unitId, "roleplay", 1);
   const si = addSpeak(d.reply);
   state.chat.push({ type: "ai", data: d, speak: si });
   ui.content.insertAdjacentHTML("beforeend", aiMsg(d, si));
@@ -576,6 +598,302 @@ function toggleMic() {
   });
 }
 
+// ================= 📘 üniteler =================
+// Her ünite 6 adım: sahne → kelimeler → dilbilgisi → rol yapma → yazma → değerlendirme.
+// İçerik ilk açılışta yapay zekâyla öğrencinin seviyesine/profiline göre üretilir ve cihazda saklanır.
+const stepLabel = id => { const s = cur.step(id); return s ? `${esc(s.tl)} · ${esc(s.tr)}` : id; };
+const nextBtn = (label = "Devam →") => `<div style="margin-top:14px"><button class="btn warm" data-act="unit-next">${esc(label)}</button></div>`;
+const firstOpenStep = uid => { const d = store.unitStepsDone(uid); return cur.stepIds().find(s => !(s in d)) || "scene"; };
+
+function showUnits() {
+  setMode("units", "📘 Üniteler");
+  const done = store.completedUnits();
+  const next = cur.nextUnit(done);
+  const st = store.vocabStats();
+  let html = `<h2>Üniteler · ${esc(pack.nameTr)}</h2>
+    <div class="muted">Her ünite bir konuşma senaryosu: ${cur.steps.map(s => esc(s.tr)).join(" → ")}.
+      İçerik ilk açılışta senin seviyene ve hedeflerine göre hazırlanır (30-60 sn), sonra cihazda saklanır.
+      Değerlendirmede %70 ve üstü üniteyi tamamlar; istediğin üniteden başlayabilirsin.</div>
+    <div class="card">🔁 Tekrar bekleyen kelime: <b>${st.due}</b> · toplam ${st.total}
+      <button class="btn ${st.due ? "" : "alt"}" data-act="review">Kelime tekrarı</button></div>`;
+  for (const lv of cur.levels) {
+    html += `<h3>${esc(lv.title_tr)} <span class="muted">(${esc(lv.band)})</span></h3><div class="unit-list">`;
+    for (const u of lv.units) {
+      const n = Object.keys(store.unitStepsDone(u.id)).length;
+      const mark = u.id in done ? "✅" : u.id === next ? "▶️" : n ? "◐" : "○";
+      const prog = u.id in done ? `%${Math.round(done[u.id] * 100)}` : n ? `${n}/${cur.steps.length}` : "";
+      html += `<button class="unit-row${u.id === next ? " next" : ""}" data-act="unit" data-unit="${u.id}">
+        <span class="u-mark">${mark}</span>
+        <span class="u-title"><span class="tl-s">${tl(u.title)}</span> · ${esc(u.title_tr)}<br><span class="muted">${esc(u.scenario_tr)}</span></span>
+        <span class="u-prog">${prog}</span></button>`;
+    }
+    html += "</div>";
+  }
+  ui.content.innerHTML = html;
+}
+
+function unitHeader(u, current) {
+  const d = store.unitStepsDone(u.id);
+  const pills = cur.steps.map(s => `<button class="step-pill${s.id === current ? " on" : ""}${s.id in d ? " done" : ""}"
+    data-act="step" data-step="${s.id}" ${state.content ? "" : "disabled"}>${s.id in d ? "✓ " : ""}${esc(s.tr)}</button>`).join("");
+  return `<div class="muted"><button class="linkish" data-act="units-list">← Üniteler</button> · ${esc(u.level_title)} · ${esc(u.band)}</div>
+    <h2><span class="tl-s">${tl(u.title)}</span> <span class="muted">${esc(u.title_tr)}</span></h2>
+    <div class="muted">🎯 ${esc(u.can_do_tr)}</div><div class="steps">${pills}</div>`;
+}
+const regenLink = () => `<div class="muted" style="margin-top:24px">İçerik beğenilmediyse:
+  <button class="linkish" data-act="unit-regen">üniteyi yeniden üret</button></div>`;
+
+async function openUnit(uid, regenerate = false) {
+  const u = cur.unit(uid);
+  if (!u) return;
+  setMode("unit", `📘 ${u.title_tr}`);
+  state.unitId = uid;
+  state.content = null;
+  const cached = !regenerate && store.getUnitContent(uid);
+  if (cached) { state.content = cached; openStep(firstOpenStep(uid)); return; }
+  if (!store.apiKey()) { ui.content.innerHTML = unitHeader(u, null); showError(new LLMError("API_KEY_MISSING")); return; }
+  ui.content.innerHTML = unitHeader(u, null) + `<div class="card">⏳ <b>Ünite hazırlanıyor…</b> İlk açılışta 30-60 saniye
+    sürebilir; sonra cihazda saklanır ve hemen açılır. Bu sırada başka ekrana geçersen hazırlık yarıda kalır.</div>`;
+  setBusy(true);
+  const g = state.gen;
+  try {
+    const c = await tutor.unitContent(uid, regenerate);
+    if (g !== state.gen) return;
+    setBusy(false);
+    state.content = c;
+    openStep(firstOpenStep(uid));
+  } catch (e) { if (g === state.gen) showError(e); }
+}
+
+// Adımdaki seslendirilebilir metinler (🔊 sıraları sabit kalsın diye bir kez kaydedilir)
+function registerSpeak(c, stepId) {
+  const start = state.speak.length;
+  if (stepId === "scene") {
+    const first = c.scene.characters?.[0]?.id;
+    for (const ln of c.scene.lines) addSpeak(ln.text || "", ln.speaker === first ? 1.05 : 0.88);
+  } else if (stepId === "vocab") for (const w of c.vocab) addSpeak(w.word || "");
+  else if (stepId === "grammar") for (const e of c.grammar.examples || []) addSpeak(e.text || "");
+  return start;
+}
+
+function stepBody(u, c, stepId, start) {
+  if (stepId === "scene") {
+    const sc = c.scene;
+    const names = Object.fromEntries((sc.characters || []).map(ch => [ch.id, ch.name || ch.id]));
+    const roles = (sc.characters || []).map(ch => `<b>${esc(ch.name)}</b>: ${esc(ch.role_tr)}`).join(" · ");
+    const lines = sc.lines.map((ln, i) => `<div class="line"><div class="who">${esc(names[ln.speaker] || ln.speaker)}</div>
+      <div class="ln"><span class="tl">${tl(ln.text)}</span><button class="icon" data-act="say" data-i="${start + i}">🔊</button>${TOGGLE}
+      <div class="tr">${esc(ln.tr)}</div></div></div>`).join("");
+    return `<h3>${stepLabel("scene")}</h3>
+      <div class="card"><div>${esc(sc.setting_tr)}</div><div class="muted">${roles}</div></div>
+      <button class="btn" data-act="play-all">▶ Tümünü dinle</button> <button class="btn alt" data-act="stop-audio">■ Durdur</button>
+      <div class="card">${lines}</div>
+      <div class="muted">İpucu: her repliği dinleyip yüksek sesle tekrar et (shadowing). Çeviri için TR'ye dokun.
+        Anlamadığın yeri aşağıya yazarak sorabilirsin.</div>${nextBtn()}`;
+  }
+  if (stepId === "vocab") {
+    const rows = c.vocab.map((w, i) => `<tr><td><span class="tl-s">${esc(w.word)}</span><button class="icon" data-act="say" data-i="${start + i}">🔊</button></td>
+      <td>${esc(w.reading || "")}</td><td>${esc(w.meaning_tr)}</td>
+      <td><span class="tl-ex">${tl(w.example || "")}</span>${w.example_tr ? TOGGLE + `<div class="tr">${esc(w.example_tr)}</div>` : ""}</td></tr>`).join("");
+    return `<h3>${stepLabel("vocab")}</h3>
+      <div class="card vocab"><table><tr><th>Kelime</th><th>${pack.code === "ja" ? "Okunuş" : pack.code === "de" ? "Artikel / çoğul" : "Okunuş"}</th><th>Anlam</th><th>Örnek</th></tr>${rows}</table></div>
+      <div class="muted">"Devam" dediğinde bu kelimeler tekrar listene eklenir.</div>${nextBtn("Tekrar listeme ekle ve devam →")}`;
+  }
+  if (stepId === "grammar") {
+    const g = c.grammar;
+    const paras = String(g.explanation_tr || "").split(/\n\s*\n/).map(p => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`).join("");
+    const ex = (g.examples || []).map((e, i) => `<div class="line"><div class="ln"><span class="tl">${tl(e.text)}</span>
+      <button class="icon" data-act="say" data-i="${start + i}">🔊</button>${TOGGLE}<div class="tr">${esc(e.tr)}</div></div></div>`).join("");
+    return `<h3>${stepLabel("grammar")}: ${esc(g.point || "")}</h3><div class="card">${paras}</div><div class="card">${ex}</div>
+      <div class="muted">Anlamadığın bir yer varsa ya da kendi örnek cümleni denemek istersen aşağıya yaz.</div>${nextBtn()}`;
+  }
+  if (stepId === "roleplay") {
+    const rp = c.roleplay;
+    return `<h3>${stepLabel("roleplay")}</h3><div class="card">
+      <b>Sen:</b> ${esc(rp.learner_role_tr)}<br><b>Karşındaki:</b> ${esc(rp.partner_name)} — ${esc(rp.partner_role_tr)}<br>
+      <b>Görev:</b> ${esc(rp.goal_tr)}<div class="muted">Yazarak, 🎤 ya da 🎧 ile cevap ver. Takılırsan Türkçe sorabilirsin.</div></div>
+      <button class="btn alt" data-act="unit-next">Sahneyi bitir →</button>`;
+  }
+  if (stepId === "writing") {
+    const w = c.writing;
+    return `<h3>${stepLabel("writing")}</h3><div class="card"><b>Görev:</b> ${esc(w.task_tr)}
+      <div class="muted">💡 ${esc(w.hint_tr || "")}</div></div>
+      <div class="muted">Metnini aşağıya ${esc(pack.nameTr)} yaz ve gönder (birkaç cümle). İstersen bu adımı
+        <button class="linkish" data-act="unit-next">atlayabilirsin</button>.</div>`;
+  }
+  return "";
+}
+
+function openStep(stepId) {
+  const u = cur.unit(state.unitId), c = state.content;
+  if (!u || !c) return;
+  // adım değişince önceki adımın oturumu kapanır (özeti hafızaya geçer)
+  if (vm.on) vm.stop();
+  state.gen++;
+  if (state.busy) setBusy(false);
+  stopListening(true);
+  speech.stop();
+  endSession();
+  state.step = stepId;
+  state.chat = [];
+  state.speak = [];
+  state.speakPitch = [];
+  state.playTok = null;
+  state.task = null;
+  ui.title.textContent = `📘 ${u.title_tr} · ${cur.step(stepId).tr}`;
+  ui.main.scrollTop = 0;
+  if (stepId === "quiz") {
+    state.sessionId = null;
+    setInput(false, "Değerlendirmede seçeneklere dokun.");
+    state.quiz = { i: 0, correct: 0, chosen: null };
+    renderQuiz();
+    return;
+  }
+  const start = registerSpeak(c, stepId);
+  state.header = () => unitHeader(u, stepId) + stepBody(u, c, stepId, start) + regenLink();
+  state.sessionId = store.newSession(`unit:${u.id}:${stepId}`, u.id);
+  if (stepId === "roleplay") {
+    state.task = P.ROLEPLAY(u, c.roleplay);
+    setInput(true, "Rolündeki cevabını yaz ya da 🎧 ile konuş…");
+    const d = tutor.startRoleplay(state.sessionId, c);
+    const si = addSpeak(d.reply, 0.88);
+    state.lastReply = d.reply;
+    state.chat.push({ type: "ai", data: d, speak: si });
+    renderChat();
+    speakText(d.reply, si, undefined, undefined, 0.88);
+    return;
+  }
+  if (stepId === "writing") setInput(true, `Metnini ${pack.nameTr} yaz ve gönder…`);
+  else {
+    state.task = P.LESSON_QA(u, cur.step(stepId).tr, c.grammar?.point || u.grammar.join(" · "));
+    setInput(true, "Soru sor ya da kendi örnek cümleni dene…");
+  }
+  renderChat();
+  ui.main.scrollTop = 0;
+}
+
+function unitNext() {
+  const uid = state.unitId, st = state.step, c = state.content;
+  if (st === "scene" || st === "grammar") store.markStep(uid, st, 1);
+  else if (st === "vocab") { tutor.addUnitVocab(uid, c); store.markStep(uid, "vocab", 1); toast(`${c.vocab.length} kelime tekrar listene eklendi.`); }
+  else if (st === "roleplay") store.markStep(uid, "roleplay", 0.5);
+  else if (st === "writing") store.markStep(uid, "writing", 0.2);       // atlandıysa; yapıldıysa puanı zaten daha yüksek
+  const ids = cur.stepIds();
+  const i = ids.indexOf(st);
+  if (i + 1 < ids.length) openStep(ids[i + 1]); else showUnits();
+}
+
+// ▶ Tümünü dinle: sahnenin repliklerini sırayla, iki kişi farklı perdeden
+function playAll() {
+  const c = state.content;
+  if (!c) return;
+  const tok = state.playTok = {};
+  const n = c.scene.lines.length;
+  let k = 0;
+  const next = () => {
+    if (state.playTok !== tok || k >= n) return;
+    const i = k++;
+    speakText(state.speak[i], i, () => setTimeout(next, 300), undefined, state.speakPitch[i] || 1);
+  };
+  next();
+}
+
+// ---- yazma ----
+async function writingCheck(text) {
+  if (!store.apiKey()) { showError(new LLMError("API_KEY_MISSING")); return; }
+  setBusy(true);
+  const g = state.gen;
+  try {
+    const fb = await tutor.checkWriting(state.unitId, state.content, text);
+    if (g !== state.gen) return;
+    setBusy(false);
+    const comments = (fb.comments || []).filter(x => x && typeof x === "object").map(x =>
+      `<div class="fix">${quote(esc(x.original))} → <b>${quote(tl(x.corrected || ""))}</b><br>${esc(x.explanation_tr || "")}</div>`).join("");
+    const html = `<div class="card"><b>Düzeltilmiş hâli</b><div class="tl">${tl(fb.corrected || "")}</div>${comments}
+      <p>🌸 ${esc(fb.praise_tr || "")}</p><div class="muted">Puan: %${Math.round(fb.score * 100)}
+      · İstersen düzeltip yeniden gönderebilirsin.</div>${nextBtn()}</div>`;
+    state.chat.push({ type: "html", html });
+    ui.content.insertAdjacentHTML("beforeend", html);
+    scrollBottom();
+  } catch (e) { if (g === state.gen) showError(e); }
+}
+
+// ---- değerlendirme ----
+function renderQuiz() {
+  const u = cur.unit(state.unitId), c = state.content, q = state.quiz;
+  const total = c.quiz.length;
+  state.header = null;
+  if (q.i >= total) {
+    const score = q.correct / total;
+    store.markStep(u.id, "quiz", score);
+    const passed = score >= 0.7;
+    const nx = cur.nextUnit(store.completedUnits());
+    ui.content.innerHTML = unitHeader(u, "quiz") + `<h3>${stepLabel("quiz")} · Sonuç</h3>
+      <div class="card"><div class="big">${q.correct} / ${total}</div>
+      <p>${passed ? "🎉 Üniteyi tamamladın!" : "Biraz daha çalışalım; %70 ve üstüyle ünite tamamlanır."}</p>
+      <button class="btn alt" data-act="step" data-step="quiz">🔁 Tekrar dene</button>
+      ${passed && nx ? `<button class="btn warm" data-act="unit" data-unit="${nx}">Sıradaki ünite →</button>` : ""}
+      <button class="btn alt" data-act="units-list">Üniteler</button></div>`;
+    return;
+  }
+  const item = c.quiz[q.i];
+  const ans = Number(item.answer);
+  const opts = item.options.map((o, oi) => {
+    const cls = q.chosen === null ? "" : oi === ans ? " right" : oi === q.chosen ? " wrong" : "";
+    return `<button class="opt${cls}" data-act="quiz-answer" data-o="${oi}" ${q.chosen === null ? "" : "disabled"}>${tl(String(o))}</button>`;
+  }).join("");
+  const after = q.chosen === null ? "" : `<div class="card">${q.chosen === ans ? "✅ Doğru!" : "❌ Olmadı."} ${esc(item.explain_tr || "")}</div>
+    <button class="btn" data-act="quiz-next">Devam →</button>`;
+  ui.content.innerHTML = unitHeader(u, "quiz") + `<h3>${stepLabel("quiz")}</h3><div class="muted">Soru ${q.i + 1} / ${total}</div>
+    <div class="card"><b>${esc(item.q_tr || "")}</b>${item.q ? `<div class="tl">${tl(item.q)}</div>` : ""}</div>${opts}${after}`;
+}
+function quizAnswer(oi) {
+  const q = state.quiz;
+  if (!q || q.chosen !== null) return;
+  q.chosen = oi;
+  if (oi === Number(state.content.quiz[q.i].answer)) q.correct++;
+  renderQuiz();
+}
+
+// ================= 🔁 kelime tekrarı (aralıklı tekrar) =================
+function showReview() {
+  setMode("review", "🔁 Kelime tekrarı");
+  state.review = { queue: store.dueWords(30), shown: false, ok: 0, n: 0 };
+  renderReview();
+}
+function renderReview() {
+  const r = state.review;
+  state.speak = [];
+  state.speakPitch = [];
+  if (!r.queue.length) {
+    ui.content.innerHTML = `<h2>🔁 Kelime tekrarı</h2><div class="card">${r.n ? `Bu turu bitirdin: <b>${r.ok} / ${r.n}</b> bildin. 👏` : "Şimdilik tekrar edilecek kelime yok."}
+      <div class="muted">Kelimeler sohbetlerden ve ünitelerin kelime adımından gelir. Bildikçe tekrar aralığı uzar (1 gün, 3 gün, 1 hafta…);
+      bilemediğin kelime aynı turda yeniden sorulur.</div></div>
+      <button class="btn" data-nav="home">Ana sayfa</button> <button class="btn alt" data-nav="units">Üniteler</button>`;
+    return;
+  }
+  const w = r.queue[0];
+  addSpeak(w.word);
+  const back = r.shown
+    ? `<div class="rv-read">${esc(w.reading || "")} <button class="icon" data-act="say" data-i="0">🔊</button></div>
+       <div class="rv-mean">${esc(w.meaning_tr || "")}</div>
+       ${w.example_ja ? `<div class="tl" style="font-size:18px">${tl(w.example_ja)}</div><div class="muted">${esc(w.example_tr || "")}</div>` : ""}
+       <div class="rv-btns"><button class="btn warm" data-act="rv-fail">Bilemedim</button><button class="btn" data-act="rv-ok">Bildim</button></div>`
+    : `<div class="rv-btns"><button class="btn" data-act="rv-show">Cevabı göster</button></div>`;
+  ui.content.innerHTML = `<h2>🔁 Kelime tekrarı</h2>
+    <div class="muted">Kalan: ${r.queue.length} · Anlamını${pack.code === "ja" ? " ve okunuşunu" : pack.code === "de" ? " ve artikelini" : ""} aklından söyle, sonra cevabı aç.</div>
+    <div class="card rv-card"><div class="rv-word">${esc(w.word)}</div>${back}</div>`;
+}
+function reviewGrade(ok) {
+  const r = state.review;
+  const w = r.queue.shift();
+  store.reviewWord(w.id, ok);
+  r.n++;
+  if (ok) r.ok++; else r.queue.push(w);      // bilemediğini aynı turda yeniden sor
+  r.shown = false;
+  renderReview();
+}
+
 // ================= ilerleme =================
 function showProgress() {
   setMode("progress", "📈 İlerleme");
@@ -587,6 +905,8 @@ function showProgress() {
   ui.content.innerHTML = `<h2>İlerleme · ${esc(pack.nameTr)}</h2>
     ${state.summarizing ? '<div class="card muted">⏳ Son sohbetin özeti çıkarılıyor; bu sayfa birazdan kendini yenileyecek.</div>' : ""}
     <div class="card"><b>Tahmini seviye:</b> ${esc(store.get("level_estimate") || "henüz belli değil")}</div>
+    <div class="card"><b>Üniteler:</b> ${Object.keys(store.completedUnits()).length} / ${cur.order.length} tamamlandı
+      <button class="btn alt" data-nav="units">📘 Üniteler</button></div>
     <div class="card"><b>Kelimeler</b><br>Toplam ${st.total} · İyi bilinen ${st.known} · Tekrar bekleyen ${st.due}</div>
     <div class="card"><b>Sık yapılan hatalar</b>${mist ? `<table><tr><th>Tür</th><th>Sayı</th><th>Son örnek</th></tr>${mist}</table>`
       : '<div class="muted">Henüz kayıt yok.</div>'}</div>
@@ -709,6 +1029,10 @@ function showSettings(guideOpen = null) {
     <div class="hint">Her dilin kendi simgesi ve ayrı hafızası var. iPad'de açınca Paylaş → Ana Ekrana Ekle ile ayrı simge olarak eklenir.</div>
     ${others}
   </div>
+  <details class="card"><summary><b>🔧 Ses günlüğü</b> <span class="hint">(ses sorunu olursa ekran görüntüsünü gönder)</span></summary>
+    <pre id="diag" class="diag">${esc(speech.diagnostics().join("\n") || "Henüz kayıt yok.")}</pre>
+    <button class="btn alt" data-act="diag-refresh">↻ Yenile</button>
+  </details>
   <div class="card"><b>Güncelleme</b>
     <div class="muted">${esc(pack.appName)} ${APP_VERSION}${loadedBuild ? " · yapı " + esc(loadedBuild) : ""}</div>
     <button class="btn alt" data-act="update-check">🔄 Güncellemeyi denetle ve yenile</button>
@@ -909,7 +1233,20 @@ ui.content.addEventListener("click", e => {
   if (!t) return;
   if (t.dataset.nav) { go(t.dataset.nav); return; }
   const act = t.dataset.act;
-  if (act === "say") { const i = Number(t.dataset.i); if (state.speak[i]) speakText(state.speak[i], i); }
+  if (act === "say") { const i = Number(t.dataset.i); state.playTok = null; if (state.speak[i]) speakText(state.speak[i], i, undefined, undefined, state.speakPitch?.[i] || 1); }
+  else if (act === "unit") openUnit(t.dataset.unit);
+  else if (act === "units-list") showUnits();
+  else if (act === "step") { if (state.content) openStep(t.dataset.step); }
+  else if (act === "unit-next") unitNext();
+  else if (act === "unit-regen") { if (confirm("Bu ünitenin içeriği yeniden üretilsin mi? (İlerlemen silinmez.)")) openUnit(state.unitId, true); }
+  else if (act === "play-all") playAll();
+  else if (act === "stop-audio") { state.playTok = null; speech.stop(); }
+  else if (act === "quiz-answer") quizAnswer(Number(t.dataset.o));
+  else if (act === "quiz-next") { state.quiz.i++; state.quiz.chosen = null; renderQuiz(); }
+  else if (act === "review") showReview();
+  else if (act === "rv-show") { state.review.shown = true; renderReview(); if (state.speak[0]) speakText(state.speak[0], 0); }
+  else if (act === "rv-ok") reviewGrade(true);
+  else if (act === "rv-fail") reviewGrade(false);
   else if (act === "tr") t.parentNode.querySelector(".tr")?.classList.toggle("open");
   else if (act === "save-settings") saveSettings();
   else if (act === "test-voice") testVoice();
@@ -920,6 +1257,7 @@ ui.content.addEventListener("click", e => {
   else if (act === "export") exportBackup();
   else if (act === "profile") showProfile(false);
   else if (act === "profile-save") saveProfile();
+  else if (act === "diag-refresh") $("#diag").textContent = speech.diagnostics().join("\n") || "Henüz kayıt yok.";
   else if (act === "avatar-start") { $("#start-hint")?.remove(); ask(""); }
   else if (act === "key-guide") openKeyGuide();
   else if (act === "code-noted") { store.set("code_note_pending", false); showHome(); }
@@ -938,6 +1276,7 @@ ui.content.addEventListener("click", e => {
 function go(nav) {
   if (nav === "home") showHome();
   else if (nav === "free") startFree();
+  else if (nav === "units") showUnits();
   else if (nav === "text") showTextSetup();
   else if (nav === "progress") showProgress();
   else if (nav === "settings") showSettings();
@@ -968,7 +1307,9 @@ ui.furi?.addEventListener("change", () => {
   if (state.mode === "free" || (state.mode === "text" && state.sessionId)) renderChat();
 });
 // iPad'de ses ilk dokunuşla açılır
-document.addEventListener("pointerdown", () => speech.unlock(), { once: true, capture: true });
+// iPad'de ses ancak bir dokunuşla açılır: her dokunuşta (en çok 20 sn'de bir) ses oturumu uyanık tutulur.
+document.addEventListener("pointerdown", () => speech.unlock(), { capture: true });
+document.addEventListener("keydown", () => speech.unlock(), { capture: true });
 document.addEventListener("visibilitychange", () => { if (document.hidden) store.saveNow(); });
 
 // ================= başlangıç =================
@@ -983,7 +1324,8 @@ store.requestPersist();
 if (pack.furigana) {
   furi.init().then(t => {
     if (state.mode === "home") showHome();
-    else if (state.mode === "free" || (state.mode === "text" && state.sessionId)) renderChat();
+    else if (state.mode === "free" || state.mode === "unit" && state.header || (state.mode === "text" && state.sessionId)) renderChat();
+    else if (state.mode === "units") showUnits();
     if (!t) toast("Furigana sözlüğü yüklenemedi; metinler furiganasız gösterilecek.", 6000);
   });
 }

@@ -253,7 +253,18 @@ export function vocabStats() {
            due: db.vocab.filter(w => w.due <= n).length };
 }
 
-// ---------- üniteler (sonraki sürüm) ----------
+// ---------- üniteler ----------
+// unit_content[ünite] = yapay zekânın ürettiği içerik (bir kez üretilir, cihazda saklanır)
+// unit_progress[ünite] = { adım: puan (0–1) } ; değerlendirme (quiz) ≥ 0.7 → ünite tamam
+export const getUnitContent = uid => db.unit_content[uid] || null;
+export function saveUnitContent(uid, content) { db.unit_content[uid] = content; save(); }
+export function deleteUnitContent(uid) { delete db.unit_content[uid]; save(); }
+export function markStep(uid, step, score = 1) {
+  const p = (db.unit_progress[uid] ||= {});
+  p[step] = Math.max(p[step] ?? 0, score);           // daha düşük bir tekrar, iyi sonucu silmesin
+  save();
+}
+export const unitStepsDone = uid => ({ ...(db.unit_progress[uid] || {}) });
 export const completedUnits = () => Object.fromEntries(
   Object.entries(db.unit_progress).filter(([, st]) => (st.quiz ?? 0) >= 0.7)
     .map(([u, st]) => [u, st.quiz]));
