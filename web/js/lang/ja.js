@@ -56,6 +56,7 @@ export default {
   speakName,
 
   // konuşma modu
+  fillers: ["えーと", "ええと", "えっと", "あのー", "あの", "うーん", "そうですね"],   // duraksama sözcükleri: bunlarla biten sözde daha uzun beklenir
   sleepWords: ["おやすみ", "お休み", "オヤスミ"],
   wakeWords: name => ["ことのは", "コトノハ", "言の葉", "言葉", "kotonoha", name, speakName(name)],
   wakeHint: name => `「ねえ、${speakName(name)}」`,

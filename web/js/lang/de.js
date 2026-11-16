@@ -22,6 +22,7 @@ export default {
   secPerUnit: 0.2,
   speakName: name => name,
 
+  fillers: ["äh", "ähm", "hm", "hmm", "also", "na ja"],   // duraksama sözcükleri: bunlarla biten sözde daha uzun beklenir
   sleepWords: ["gute nacht", "gutenacht", "schlaf gut"],
   wakeWords: name => [name],
   wakeHint: name => `„Hallo ${name}“`,
