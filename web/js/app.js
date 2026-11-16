@@ -13,7 +13,7 @@ import * as cloud from "./cloud.js";
 import * as cur from "./curriculum.js";
 import * as P from "./prompts.js";
 
-export const APP_VERSION = "0.6.1-web";
+export const APP_VERSION = "0.6.2-web";
 const ROOT = new URL("../", import.meta.url);      // sitenin kökü (web/), dil klasöründen bağımsız
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
@@ -50,7 +50,8 @@ const quote = s => `${QA}${s}${QB}`;
 const tl = text => pack.furigana
   ? furi.toRuby(text, S().furigana, S().furigana === "unknown" ? store.knownWords() : new Set())
   : esc(text).replace(/\n/g, "<br>");
-const TOGGLE = '<button class="toggle" data-act="tr">TR</button>';
+// Tek satırın Türkçesini aç/kapat. Üstteki "Türkçe" kutusu işaretliyken hepsi açık olduğundan bu düğmeler gizlenir.
+const TOGGLE = '<button class="toggle" data-act="tr" title="Bu satırın Türkçesini göster">Türkçesi</button>';
 const FLAGS = { ja: "🇯🇵", de: "🇩🇪", en: "🇬🇧", tr: "🇹🇷" };
 
 function scrollBottom() { ui.main.scrollTop = ui.main.scrollHeight; }
@@ -367,7 +368,7 @@ function wordPill(w) {
 
 function aiMsg(d, si) {
   const final = d.goal_reached && state.mode === "text";   // sınav provasının son değerlendirmesi: hep açık
-  const tr = d.reply_tr ? `${TOGGLE}<div class="tr${final ? " open" : ""}">${esc(d.reply_tr)}</div>` : "";
+  const tr = d.reply_tr ? `${final ? TOGGLE.replace(">Türkçesi<", ">gizle<") : TOGGLE}<div class="tr${final ? " open" : ""}">${esc(d.reply_tr)}</div>` : "";
   let fix = "";
   const c = d.correction;
   if (c) fix = `<div class="fix">✏️ ${quote(esc(c.original))} → <b>${quote(tl(c.corrected))}</b><br>${esc(c.explanation_tr)}</div>`;
@@ -1278,7 +1279,10 @@ ui.content.addEventListener("click", e => {
   else if (act === "rv-show") { state.review.shown = true; renderReview(); if (state.speak[0]) speakText(state.speak[0], 0); }
   else if (act === "rv-ok") reviewGrade(true);
   else if (act === "rv-fail") reviewGrade(false);
-  else if (act === "tr") t.parentNode.querySelector(".tr")?.classList.toggle("open");
+  else if (act === "tr") {
+    const open = t.parentNode.querySelector(".tr")?.classList.toggle("open");
+    t.textContent = open ? "gizle" : "Türkçesi";
+  }
   else if (act === "save-settings") saveSettings();
   else if (act === "test-voice") testVoice();
   else if (act === "test-key") testKey();

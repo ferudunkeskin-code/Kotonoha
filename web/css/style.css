@@ -198,3 +198,6 @@ details.guide .btn { font-size: 15px; padding: 7px 14px; }
 .rv-read { font-size: 20px; }
 .rv-mean { font-size: 19px; margin: 6px 0; }
 .rv-btns { margin-top: 12px; }
+/* "Türkçe" kutusu işaretliyken bütün çeviriler açık: satır başına "Türkçesi" düğmesi gereksiz ve yanıltıcı */
+body.show-tr .toggle[data-act="tr"] { display: none; }
+.toggle[data-act="tr"] { border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; margin-left: 4px; }
