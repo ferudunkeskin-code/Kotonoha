@@ -11,7 +11,7 @@ import { LLMError, chat, cleanKey, describeKey } from "./llm.js";
 import { VoiceMode, voiceModeAvailable } from "./voicemode.js";
 import * as cloud from "./cloud.js";
 
-export const APP_VERSION = "0.5.1-web";
+export const APP_VERSION = "0.5.2-web";
 const ROOT = new URL("../", import.meta.url);      // sitenin kökü (web/), dil klasöründen bağımsız
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
@@ -123,7 +123,7 @@ function setMode(mode, title) {
   state.speak = [];
   ui.title.textContent = title;
   document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.nav === mode));
-  setInput(mode === "free");
+  setInput(mode === "free" || mode === "home");
   ui.main.scrollTop = 0;
 }
 
@@ -150,6 +150,7 @@ async function catchUpSummaries() {
 // ================= ana sayfa =================
 function showHome() {
   setMode("home", "Ana sayfa");
+  setInput(true, `Merhaba de… (${pack.nameTr} ya da Türkçe)`);
   const s = S();
   const stats = store.vocabStats();
   const level = store.get("level_estimate");
@@ -170,9 +171,9 @@ function showHome() {
   if (s.voice_on && speech.ttsAvailable() && speech.voicesKnown() && !speech.targetVoices().length)
     html += `<div class="card warn">Bu cihazda ${esc(pack.nameTr)} ses bulunamadı. iPad'de: Ayarlar → Erişilebilirlik →
       Seslendirilen İçerik → Sesler → ${esc(pack.nameTr)}.</div>`;
-  if (store.sessionCount() === 0) html += `<div class="card">👋 İlk kez mi buradasın? Önce <b>serbest sohbet</b>
-      yapalım; birkaç mesajda seviyeni anlarım.<br><button class="btn warm" data-nav="free">Sohbete başla</button></div>`;
-  else html += `<div class="card">💬 <b>Serbest sohbet</b><br><button class="btn warm" data-nav="free">Sohbete başla</button></div>`;
+  html += `<div class="card">💬 <b>Hemen konuşmaya başla:</b> aşağıya yaz, 🎤 ile söyle ya da 🎧 ile sesli sohbete geç.
+    İlk sözü sen söylersin; Türkçe de olur (ör. „Merhaba, bugün nasılsın?“ ya da „Dünkü konuya devam edelim“).
+    ${store.sessionCount() === 0 ? '<div class="muted">İlk kez buradasın: birkaç mesajda seviyeni anlarım.</div>' : ""}</div>`;
   html += `<div class="card">📘 <b>Üniteler</b> ve 🔁 <b>kelime tekrarı</b> bir sonraki sürümde geliyor.
     <div class="muted">Şimdilik sohbette öğrenilen kelimeler biriktiriliyor: ${stats.total} kelime.</div></div>`;
   if (level) html += `<div class="muted">Tahmini seviye: ${esc(level)}</div>`;
@@ -253,15 +254,25 @@ function saveProfile() {
 const freeHeader = () => `<h2>${esc(pack.titles.free)} · Serbest sohbet</h2><div class="muted">İstediğin konuda yaz.
     Hatalarını en fazla birer birer düzeltirim; yeni kelimeler tekrar listene eklenir.</div>`;
 
-function startFree() {
+// İlk sözü öğrenci söyler: avatar kendiliğinden açılış yapmaz (karşılıklı konuşma hissi).
+// first: ana sayfada yazılıp gönderilen ilk mesaj. Öğrenci isterse "Sen başla" ile avatar açar.
+function startFree(first = "") {
   setMode("free", "💬 Serbest sohbet");
-  setInput(true, `${pack.nameTr} yaz… (Türkçe soru da sorabilirsin)`);
+  setInput(true, `${pack.nameTr} yaz… (Türkçe de yazabilirsin)`);
   state.sessionId = store.newSession("free");
   state.header = freeHeader;
   state.task = null;
   renderChat();
-  ask("");
+  if (first) sendText(first);
+  else {
+    ui.content.insertAdjacentHTML("beforeend", startHint());
+    scrollBottom();
+  }
 }
+
+const startHint = () => `<div class="card start-hint" id="start-hint">👋 İlk sözü sen söyle: yaz, 🎤 ile konuş ya da 🎧 ile
+  sesli sohbete geç. Türkçe de olur (ör. „Dünkü konuya devam edelim“).
+  <br><button class="btn alt" data-act="avatar-start">🗣 ${esc(S().character_name)} başlasın</button></div>`;
 
 // ================= 📄 metinle çalış =================
 const KINDS = () => ({
@@ -351,8 +362,14 @@ function aiMsg(d, si) {
 function send() {
   const text = ui.input.value.trim();
   if (!text || state.busy || ui.input.disabled) return;
-  stopListening();
+  stopListening(true);
   ui.input.value = "";
+  if (state.mode === "home") { startFree(text); return; }     // ana sayfadan doğrudan sohbete
+  sendText(text);
+}
+
+function sendText(text) {
+  $("#start-hint")?.remove();
   state.chat.push({ type: "user", text });
   ui.content.insertAdjacentHTML("beforeend", userMsg(text));
   scrollBottom();
@@ -385,6 +402,7 @@ const stateLabel = st => ({
 }[st] || "");
 const vm = new VoiceMode({
   onUtterance: text => {
+    $("#start-hint")?.remove();
     state.chat.push({ type: "user", text, spoken: true });
     ui.content.insertAdjacentHTML("beforeend", userMsg(text, true));
     scrollBottom();
@@ -514,6 +532,7 @@ function toggleVoice() {
   if (vm.on) { vm.stop(); speech.stop(); toast("Konuşma modu kapandı."); return; }
   if (!voiceModeAvailable()) { toast("Bu tarayıcıda konuşma tanıma yok.", 5000); return; }
   if (ui.input.disabled) return;
+  if (state.mode === "home") startFree();
   stopListening();
   speech.unlock();
   vm.silenceMs = Number(S().silence_ms) || 1400;
@@ -528,8 +547,9 @@ function toggleVoice() {
 }
 
 // ================= mikrofon =================
-function stopListening() {
-  if (state.stopListen) { const f = state.stopListen; state.stopListen = null; f(); }
+// discard: söyleneni bırak (gönderildikten sonra son tanıma sonucu kutuya geri yazılmasın)
+function stopListening(discard = false) {
+  if (state.stopListen) { const f = state.stopListen; state.stopListen = null; f(discard); }
   ui.mic.classList.remove("rec");
   ui.mic.textContent = "🎤";
 }
@@ -900,6 +920,7 @@ ui.content.addEventListener("click", e => {
   else if (act === "export") exportBackup();
   else if (act === "profile") showProfile(false);
   else if (act === "profile-save") saveProfile();
+  else if (act === "avatar-start") { $("#start-hint")?.remove(); ask(""); }
   else if (act === "key-guide") openKeyGuide();
   else if (act === "code-noted") { store.set("code_note_pending", false); showHome(); }
   else if (act === "copy-code") copyCode();

@@ -164,7 +164,26 @@ export function speak(text, { voiceName = "", rate = 0.9, silent = false, onMout
 const Rec = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 export const sttAvailable = () => !!Rec;
 
-/** Dinlemeye başlar; durdurmak için dönen fonksiyonu çağır. */
+// Tanıma sonuçlarını tek metne çevirir. iPad konuşmayı parçalara böler ve parçaları boşluksuz,
+// her biri büyük harfle başlayan hâlde verir ("tanışmaKonuşmasını"); bazen de o ana kadarki metnin
+// tamamını tekrar verir. Japoncada sözcük arası boşluk olmadığı için ayraç yok.
+export function joinTranscripts(results, lang = pack.locale) {
+  const sep = String(lang).startsWith("ja") ? "" : " ";
+  let text = "";
+  for (const r of results) {
+    let t = (r[0]?.transcript || "").trim();
+    if (!t) continue;
+    if (text && t.startsWith(text)) { text = t; continue; }      // kümülatif tekrar
+    if (text && text.endsWith(t)) continue;
+    // Türkçe: cümle ortasında başlayan parçanın büyük harfini küçült
+    if (text && String(lang).startsWith("tr") && !/[.!?…]$/.test(text)) t = t.charAt(0).toLocaleLowerCase("tr-TR") + t.slice(1);
+    text = text ? text + sep + t : t;
+  }
+  return sep ? text.replace(/\s+/g, " ").trim() : text.trim();
+}
+
+/** Dinlemeye başlar. Durdurmak için dönen fonksiyonu çağır: stop() son sonucu da verir,
+ *  stop(true) ise sessizce bırakır (gönderildikten sonra eski metin kutuya geri gelmesin). */
 export function listen({ lang = pack.locale, onText = () => {}, onEnd = () => {}, onError = () => {} } = {}) {
   if (!Rec) { onError("Bu tarayıcı konuşma tanımayı desteklemiyor."); return () => {}; }
   stop();
@@ -173,22 +192,22 @@ export function listen({ lang = pack.locale, onText = () => {}, onEnd = () => {}
   r.interimResults = true;
   r.continuous = true;
   r.maxAlternatives = 1;
-  let finalText = "";
+  let text = "", dead = false;
   r.onresult = e => {
-    let interim = "";
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const res = e.results[i];
-      if (res.isFinal) finalText += res[0].transcript;
-      else interim += res[0].transcript;
-    }
-    onText(finalText + interim, false);
+    if (dead) return;
+    text = joinTranscripts(e.results, lang);
+    onText(text, false);
   };
   r.onerror = e => {
+    if (dead) return;
     const msg = { "not-allowed": "Mikrofon izni verilmedi.", "service-not-allowed": "Konuşma tanıma izni yok (Ayarlar → Safari / Siri ve Dikte).",
                   "no-speech": "Ses duyulmadı.", "network": "Konuşma tanıma için internet gerekiyor." }[e.error] || e.error;
     onError(msg);
   };
-  r.onend = () => { onText(finalText, true); onEnd(); };
+  r.onend = () => { if (dead) return; onText(text, true); onEnd(); };
   try { r.start(); } catch (e) { onError(String(e)); }
-  return () => { try { r.stop(); } catch (e) { /* */ } };
+  return (discard = false) => {
+    if (discard) { dead = true; try { r.abort(); } catch (e) { /* */ } }
+    else { try { r.stop(); } catch (e) { /* */ } }
+  };
 }

@@ -161,3 +161,4 @@ details.guide .btn { font-size: 15px; padding: 7px 14px; }
 #btn-sttlang { background: var(--card); border: 1px solid var(--line) !important; min-width: 58px; font-size: 15px; font-weight: 600; line-height: 1.1; padding: 0 8px !important; }
 .sttlang.is-tr { background: #fbefe9 !important; border-color: var(--accent) !important; color: var(--accent); }
 .sttlang small { display: block; font-size: 10px; font-weight: normal; color: var(--muted); }
+.card.start-hint { border-style: dashed; color: var(--muted); }

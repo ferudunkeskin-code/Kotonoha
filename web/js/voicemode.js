@@ -16,6 +16,7 @@
 // Uyku ve uyanma sözleri dil paketinden gelir (ja: おやすみ / ねえ、コトノハ;
 // de: Gute Nacht / Hallo <ad>; en: Good night / Hey <ad>). Mikrofon hedef dili dinler.
 import { pack } from "./lang/index.js";
+import { joinTranscripts } from "./speech.js";
 
 const Rec = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 
@@ -39,17 +40,8 @@ export function endsWithFiller(s, fillers = pack.fillers || []) {
 }
 const sepFor = lang => (lang || "").startsWith("ja") ? "" : " ";
 
-// iOS bazen her sonuçta o ana kadarki metnin tamamını tekrar verir; tekrarları ayıkla.
-export function joinResults(results) {
-  let text = "";
-  for (const r of results) {
-    const t = r[0]?.transcript || "";
-    if (!t) continue;
-    if (t.startsWith(text)) text = t;
-    else if (!text.endsWith(t)) text += t;
-  }
-  return text.trim();
-}
+// (eski ad; testler ve geriye uyumluluk için)
+export const joinResults = results => joinTranscripts(results);
 
 export class VoiceMode {
   /**
@@ -216,7 +208,7 @@ export class VoiceMode {
     r.onresult = e => {
       if (this.rec !== r) return;
       this.failures = 0;
-      const t = joinResults(e.results);
+      const t = joinTranscripts(e.results, this.lang);
       if (this.state === "sleeping") {
         const words = this.cb.wakeWords ? this.cb.wakeWords() : pack.wakeWords("");
         if (hasWakeWord(t, words)) { this._stopRec(); this._clearTimers(); this._set("waiting"); this.cb.onWake?.(); }
