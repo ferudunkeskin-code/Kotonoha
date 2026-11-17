@@ -13,7 +13,7 @@ import * as cloud from "./cloud.js";
 import * as cur from "./curriculum.js";
 import * as P from "./prompts.js";
 
-export const APP_VERSION = "0.6.2-web";
+export const APP_VERSION = "0.6.3-web";
 const ROOT = new URL("../", import.meta.url);      // sitenin kökü (web/), dil klasöründen bağımsız
 const esc = furi.esc;
 const $ = s => document.querySelector(s);

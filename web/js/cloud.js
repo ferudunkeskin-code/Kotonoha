@@ -11,6 +11,7 @@
 import { BACKUP_URL } from "./config.js";
 import * as store from "./store.js";
 import { pack } from "./lang/index.js";
+import { order as unitOrder } from "./curriculum.js";
 
 const STATUS_KEY = `kotonoha-cloud-${pack.code}`;
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";      // karışan harfler yok (I, L, O, U)
@@ -71,7 +72,7 @@ export async function backupNow({ force = false } = {}) {
   inflight = (async () => {
     try {
       await call({ action: "save", code: code(), lang: pack.code, name: store.settings().learner_name,
-                   data: store.exportCompactJSON() });
+                   data: store.exportCompactJSON(), summary: { ...store.activitySummary(), units_total: unitOrder.length, lang_name: pack.nameTr } });
       setStatus({ last_at: new Date().toISOString(), last_rev: store.rev(), last_error: null });
       return "ok";
     } catch (e) {

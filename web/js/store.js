@@ -280,6 +280,35 @@ export const sessionsSince = iso => db.sessions.filter(s => !iso || s.started > 
 
 // Drive'a giden kısa yedek: özetler, bilgiler, hatalar, kelimeler, profil ve ayarlar eksiksiz;
 // ham mesajlardan yalnızca son 40 oturumunkiler (eskilerin özü zaten özetlerde).
+// Kullanım özeti (Drive'daki "Kotonoha Özet" dosyası için): yalnızca sayılar ve tarihler,
+// sohbetlerin içeriği yok. Günler cihazın yerel saatine göre.
+const localDay = ts => { const d = new Date(String(ts).endsWith("Z") ? ts : ts + "Z"); return isNaN(d) ? null :
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+export function activitySummary() {
+  const days = {};
+  let last = null;
+  for (const m of db.messages) {
+    if (m.role !== "user") continue;
+    const day = localDay(m.ts);
+    if (!day) continue;
+    const e = (days[day] ||= { msgs: 0, sessions: new Set() });
+    e.msgs++; e.sessions.add(m.session_id);
+    if (!last || m.ts > last) last = m.ts;
+  }
+  const out = {};
+  for (const [d, e] of Object.entries(days)) out[d] = { msgs: e.msgs, sessions: e.sessions.size };
+  const prog = Object.values(db.unit_progress || {});
+  return {
+    last_active: last ? new Date(last + "Z").toISOString() : null,
+    days: out,
+    units_done: Object.keys(completedUnits()).length,
+    units_started: prog.filter(p => Object.keys(p).length).length,
+    words: db.vocab.length,
+    words_known: db.vocab.filter(w => w.interval_days >= 7).length,
+    level: get("level_estimate") || null,
+  };
+}
+
 export function exportCompactJSON() {
   saveNow();
   const copy = JSON.parse(JSON.stringify(db));
