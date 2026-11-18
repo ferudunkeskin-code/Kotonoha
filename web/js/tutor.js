@@ -88,10 +88,11 @@ export function validateUnit(d) {
 export async function unitContent(unitId, regenerate = false) {
   if (!regenerate) { const c = store.getUnitContent(unitId); if (c) return c; }
   const u = cur.unit(unitId);
-  const est = store.get("level_estimate"), self = store.profile().level_self;
-  const level = est || (self === "0" ? "yeni başlıyor" : self) || "bilinmiyor (ünitenin seviyesini esas al)";
+  const level = levelText() || "bilinmiyor (ünitenin seviyesini esas al)";
   const mistakes = store.mistakeStats(3).map(m => m.category).join(", ") || "henüz yok";
-  const prompt = P.UNIT_GEN({ u, level, profile: store.profile(), mistakes });
+  const t = cur.trackById(u.track);
+  const program = t?.custom ? `${t.title_tr} — ${t.request_tr || t.desc_tr}` : null;
+  const prompt = P.UNIT_GEN({ u, level, profile: store.profile(), mistakes, program });
   for (let i = 0; i < 2; i++) {          // bozuk JSON gelirse bir kez daha dene
     const raw = await chat(store.settings(), `Sen deneyimli bir ${pack.nameTr} öğretmenisin ve ders materyali hazırlıyorsun.`,
       [{ role: "user", content: prompt }], 8000);
@@ -122,4 +123,94 @@ export async function checkWriting(unitId, content, text) {
   d.score = score;
   store.markStep(unitId, "writing", score);
   return d;
+}
+
+// ---------------- ➕ kullanıcının kendi programı ----------------
+function levelText() {
+  const est = store.get("level_estimate"), self = store.profile().level_self;
+  return est || (self === "0" ? "yeni başlıyor" : self) || "";
+}
+const clean = (x, n = 300) => String(x ?? "").trim().slice(0, n);
+function cleanUnit(u) {
+  if (!u || typeof u !== "object" || !u.title_tr || !u.scenario_tr) return null;
+  return { title: clean(u.title || u.title_tr, 120), title_tr: clean(u.title_tr, 120), scenario_tr: clean(u.scenario_tr, 400),
+           can_do_tr: clean(u.can_do_tr, 300), grammar: (Array.isArray(u.grammar) ? u.grammar : []).map(g => clean(g, 120)).filter(Boolean).slice(0, 4) };
+}
+function cleanLevel(lv) {
+  const units = (Array.isArray(lv?.units) ? lv.units : []).map(cleanUnit).filter(Boolean);
+  return units.length ? { title_tr: clean(lv.title_tr || "Bölüm", 120), band: clean(lv.band || "", 20), units } : null;
+}
+
+// Öneri: { title_tr, desc_tr, levels } (henüz kimliksiz). previous/change: yeniden öneri için.
+export async function proposeProgram({ request, count, previous = null, change = "" }) {
+  const prompt = P.PROGRAM_GEN({ request, count, level: levelText() || "bilinmiyor", profile: store.profile(),
+                                 previous: previous ? JSON.stringify(previous) : null, change });
+  for (let i = 0; i < 2; i++) {
+    const d = extractJson(await chat(store.settings(), `Sen deneyimli bir ${pack.nameTr} öğretmeni ve program tasarımcısısın.`,
+      [{ role: "user", content: prompt }], 6000));
+    const levels = (Array.isArray(d?.levels) ? d.levels : []).map(cleanLevel).filter(Boolean);
+    if (d?.title_tr && levels.length) return { title_tr: clean(d.title_tr, 120), desc_tr: clean(d.desc_tr, 400), levels };
+  }
+  throw new Error("Program önerisi üretilemedi. Tekrar deneyin.");
+}
+
+// Öneriye kimlik verir ve kaydeder; programı seçili program yapar.
+export function saveProgram(proposal, request) {
+  const id = cur.newTrackId();
+  const t = { id, title_tr: proposal.title_tr, desc_tr: proposal.desc_tr, request_tr: clean(request, 1500),
+              created: new Date().toISOString(), next_no: 1, levels: [] };
+  for (const lv of proposal.levels) appendLevel(t, lv);
+  store.saveCustomTrack(t);
+  cur.setTrack(id);
+  return t;
+}
+function appendLevel(t, lv) {
+  const n = t.levels.length + 1;
+  t.levels.push({ id: `${t.id}-B${n}`, title_tr: lv.title_tr, band: lv.band,
+                  units: lv.units.map(u => ({ ...u, id: `${t.id}-${String(t.next_no++).padStart(2, "0")}` })) });
+}
+
+// "Devamını oluştur": programa yeni bir bölüm önerir (kaydetmez).
+export async function proposeMore(trackId, { count = 6, focus = "" } = {}) {
+  const t = store.customTracks().find(x => x.id === trackId);
+  if (!t) throw new Error("Program bulunamadı.");
+  const prompt = P.UNITS_MORE({ track: t, count, level: levelText() || "bilinmiyor", done: store.completedUnits(),
+                                mistakes: store.mistakeStats(3).map(m => m.category).join(", ") || "henüz yok", focus });
+  for (let i = 0; i < 2; i++) {
+    const lv = cleanLevel(extractJson(await chat(store.settings(), `Sen deneyimli bir ${pack.nameTr} öğretmeni ve program tasarımcısısın.`,
+      [{ role: "user", content: prompt }], 5000)));
+    if (lv) return lv;
+  }
+  throw new Error("Yeni üniteler üretilemedi. Tekrar deneyin.");
+}
+export function addLevel(trackId, lv) {
+  const t = structuredClone(store.customTracks().find(x => x.id === trackId));
+  appendLevel(t, lv);
+  store.saveCustomTrack(t);
+  return t;
+}
+export function removeUnit(unitId) {
+  for (const t0 of store.customTracks()) {
+    const t = structuredClone(t0);
+    let hit = false;
+    for (const lv of t.levels) { const n = lv.units.length; lv.units = lv.units.filter(u => u.id !== unitId); hit ||= lv.units.length !== n; }
+    if (hit) { t.levels = t.levels.filter(lv => lv.units.length); store.saveCustomTrack(t); store.deleteUnitContent(unitId); return t; }
+  }
+  return null;
+}
+
+// Programı paylaşmak/saklamak için dosya (ilerleme ve üretilmiş içerik girmez; yalnızca program tanımı)
+export function exportProgram(trackId) {
+  const t = store.customTracks().find(x => x.id === trackId);
+  return JSON.stringify({ app: "Kotonoha", type: "program", lang: pack.code, version: 1,
+    program: { title_tr: t.title_tr, desc_tr: t.desc_tr, request_tr: t.request_tr,
+               levels: t.levels.map(lv => ({ title_tr: lv.title_tr, band: lv.band, units: lv.units.map(({ id, ...u }) => u) })) } }, null, 1);
+}
+export function importProgram(text) {
+  const o = JSON.parse(text);
+  if (o.app !== "Kotonoha" || o.type !== "program" || !o.program) throw new Error("Bu bir Kotonoha program dosyası değil.");
+  if (o.lang !== pack.code) throw new Error(`Bu program ${String(o.lang).toUpperCase()} sürümü için; buraya yüklenemez.`);
+  const levels = (o.program.levels || []).map(cleanLevel).filter(Boolean);
+  if (!levels.length) throw new Error("Program dosyasında ünite yok.");
+  return saveProgram({ title_tr: clean(o.program.title_tr, 120) || "Program", desc_tr: clean(o.program.desc_tr, 400), levels }, o.program.request_tr || "");
 }

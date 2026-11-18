@@ -1,7 +1,9 @@
-// Müfredat: dilin ünite programları (units/<dil>.js) ve yardımcılar.
-// Bir dilde birden fazla program olabilir (ör. İngilizce: "Bilim insanı" ve "STEM projeleri").
-// Öğrenci programını profilde seçer (ayar: track); ünite kimlikleri programlar arasında benzersizdir,
-// bu yüzden program değiştirmek ilerlemeyi silmez.
+// Müfredat: dilin ünite programları.
+//  - Yerleşik programlar: units/<dil>.js (ör. İngilizce: "Bilim insanı", "STEM projeleri")
+//  - Kullanıcının kendi programları: "Program oluştur" ile yapay zekâya tarif edilip üretilir, hafızada
+//    (store.customTracks) saklanır, yedeğe girer; "Devamını oluştur" ile yeni bölümler eklenerek büyür.
+// Öğrenci programını seçer (ayar: track). Ünite kimlikleri programlar arasında benzersizdir; program
+// değiştirmek ilerlemeyi silmez.
 import { pack } from "./lang/index.js";
 import * as store from "./store.js";
 import ja from "./units/ja.js";
@@ -11,36 +13,42 @@ import en from "./units/en.js";
 const DATA = { ja, de, en }[pack.code] || ja;
 
 export const steps = DATA.steps;
-export const tracks = DATA.tracks.map(t => ({ id: t.id, title_tr: t.title_tr, desc_tr: t.desc_tr }));
 export const stepIds = () => steps.map(s => s.id);
 export const step = id => steps.find(s => s.id === id);
 
-const UNITS = {};
-const ORDER = {};
-for (const t of DATA.tracks) {
-  ORDER[t.id] = [];
-  for (const lv of t.levels) for (const u of lv.units) {
-    UNITS[u.id] = { ...u, level_id: lv.id, level_title: lv.title_tr, band: lv.band, track: t.id };
-    ORDER[t.id].push(u.id);
-  }
-}
+const allTracks = () => [...DATA.tracks.map(t => ({ ...t, custom: false })), ...store.customTracks().map(t => ({ ...t, custom: true }))];
+export const tracks = () => allTracks().map(t => ({ id: t.id, title_tr: t.title_tr, desc_tr: t.desc_tr, custom: t.custom }));
+export const builtinCount = DATA.tracks.length;
 
-// Seçili program (geçersizse ilk program)
+// Seçili program (geçersizse ilk yerleşik program)
 export function trackId() {
   const t = store.settings().track;
-  return DATA.tracks.some(x => x.id === t) ? t : DATA.tracks[0].id;
+  return allTracks().some(x => x.id === t) ? t : DATA.tracks[0].id;
 }
-export const track = () => DATA.tracks.find(t => t.id === trackId());
+export const track = () => allTracks().find(t => t.id === trackId());
+export const trackById = id => allTracks().find(t => t.id === id) || null;
 export function setTrack(id) {
-  if (DATA.tracks.some(t => t.id === id)) { store.setSetting("track", id); store.saveNow(); }
+  if (allTracks().some(t => t.id === id)) { store.setSetting("track", id); store.saveNow(); }
 }
 
+const decorate = (t, lv, u) => ({ ...u, level_id: lv.id, level_title: lv.title_tr, band: lv.band, track: t.id, custom: !!t.custom });
+
 export const levels = () => track().levels;
-export const order = () => ORDER[trackId()];
-export const unit = id => UNITS[id] || null;                 // her programdan bulunur
-export const all = () => order().map(id => UNITS[id]);
+export const order = () => track().levels.flatMap(lv => lv.units.map(u => u.id));
+export function unit(id) {                                   // her programdan bulunur
+  for (const t of allTracks()) for (const lv of t.levels) for (const u of lv.units) if (u.id === id) return decorate(t, lv, u);
+  return null;
+}
+export const all = () => track().levels.flatMap(lv => lv.units.map(u => decorate(track(), lv, u)));
 
 // Seçili programda henüz tamamlanmamış ilk ünite
 export const nextUnit = completed => order().find(id => !(id in completed)) || null;
-// Seçili programda tamamlananlar
 export const completedInTrack = completed => order().filter(id => id in completed).length;
+
+// Kullanıcı programı için benzersiz kimlik (yerleşik L1-01 / S1-01 biçimiyle çakışmaz)
+export function newTrackId() {
+  const used = new Set(allTracks().map(t => t.id));
+  let id;
+  do id = "p" + Math.random().toString(36).slice(2, 6); while (used.has(id));
+  return id;
+}

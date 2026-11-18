@@ -13,11 +13,12 @@ import * as cloud from "./cloud.js";
 import * as cur from "./curriculum.js";
 import * as P from "./prompts.js";
 
-export const APP_VERSION = "0.7.0-web";
+export const APP_VERSION = "0.8.0-web";
 const ROOT = new URL("../", import.meta.url);      // sitenin kökü (web/), dil klasöründen bağımsız
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
 
+await store.ready;              // hafıza (IndexedDB) yüklenmeden ekran kurulmaz
 buildShell(pack);
 
 const ui = {
@@ -44,6 +45,20 @@ function toast(msg, ms = 3500) {
 }
 
 const S = () => store.settings();
+
+// ---- cihaz türüne göre yönlendirmeler (iPad / Android / bilgisayar) ----
+const UA = navigator.userAgent;
+const IS_ANDROID = /Android/i.test(UA);
+const IS_IOS = /iPad|iPhone/.test(UA) || (/Macintosh/.test(UA) && "ontouchend" in document);
+const voiceHelp = () => IS_ANDROID
+  ? `Android'de: Ayarlar → (Samsung'da: Genel yönetim →) Metin okuma (Text-to-speech) → tercih edilen motor
+     <b>Google Konuşma Hizmetleri</b> → ⚙️ → Ses verilerini yükle → ${esc(pack.nameTr)}.`
+  : IS_IOS ? `iPad'de: Ayarlar → Erişilebilirlik → Seslendirilen İçerik → Sesler → ${esc(pack.nameTr)}.`
+  : `Bilgisayarda: işletim sisteminin konuşma ayarlarından ${esc(pack.nameTr)} sesi ekleyin (Chrome'da Google sesleri genelde hazırdır).`;
+const fileSaveHint = IS_ANDROID ? "paylaşım menüsünden Google Drive'a ya da Dosyalar'a kaydet"
+  : IS_IOS ? `"Dosyalar'a Kaydet" → iCloud Drive ya da Google Drive` : "İndirilenler klasörüne iner";
+const addHomeHint = IS_ANDROID ? "Android'de Chrome menüsü (⋮) → Ana ekrana ekle / Uygulamayı yükle"
+  : "iPad'de Safari'de Paylaş → Ana Ekrana Ekle";
 const [QA, QB] = pack.q;
 const quote = s => `${QA}${s}${QB}`;
 // Hedef dildeki metni ekrana hazırlar: Japoncada furigana, diğerlerinde düz metin.
@@ -133,7 +148,7 @@ function setMode(mode, title) {
   state.afterListen = null;      // ekran değişirse bekleyen "gönder" iptal
   state.finishing = false;
   ui.title.textContent = title;
-  const navOf = { unit: "units", review: "units" }[mode] || mode;
+  const navOf = { unit: "units", review: "units", progcreate: "units" }[mode] || mode;
   document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.nav === navOf));
   setInput(mode === "free" || mode === "home");
   if (ui.input.disabled) ui.input.placeholder = "";
@@ -184,12 +199,11 @@ function showHome() {
     <div class="hint">Kodu bir yere not et (Notlar, ekran görüntüsü…). Sonra da ⚙️ Ayarlar → Yedekleme'de görünür.</div>
     <button class="btn" data-act="code-noted">Not ettim</button> <button class="btn alt" data-act="copy-code">📋 Kopyala</button></div>`;
   else if (cloud.fileBackupDue()) html += `<div class="card warn">💾 <b>Son yedeğin üzerinden 7 günden fazla geçti.</b>
-    Uygulama silinirse hafıza da silinir; bir yedek al (iPad'de "Dosyalar'a Kaydet" → iCloud Drive).
+    Uygulama silinirse hafıza da silinebilir; bir yedek al (${fileSaveHint}).
     <br><button class="btn" data-act="export">⬇ Yedeği al</button> <button class="btn alt" data-act="backup-later">Sonra</button></div>`;
   if (pack.furigana && !furi.ready()) html += `<div class="card muted">Furigana sözlüğü yükleniyor… (ilk açılışta biraz sürer)</div>`;
   if (s.voice_on && speech.ttsAvailable() && speech.voicesKnown() && !speech.targetVoices().length)
-    html += `<div class="card warn">Bu cihazda ${esc(pack.nameTr)} ses bulunamadı. iPad'de: Ayarlar → Erişilebilirlik →
-      Seslendirilen İçerik → Sesler → ${esc(pack.nameTr)}.</div>`;
+    html += `<div class="card warn">Bu cihazda ${esc(pack.nameTr)} ses bulunamadı. ${voiceHelp()}</div>`;
   html += `<div class="card">💬 <b>Hemen konuşmaya başla:</b> aşağıya yaz, 🎤 ile söyle ya da 🎧 ile sesli sohbete geç.
     İlk sözü sen söylersin; Türkçe de olur (ör. „Merhaba, bugün nasılsın?“ ya da „Dünkü konuya devam edelim“).
     ${store.sessionCount() === 0 ? '<div class="muted">İlk kez buradasın: birkaç mesajda seviyeni anlarım.</div>' : ""}</div>`;
@@ -226,8 +240,8 @@ function showProfile(first = false) {
       <label>Adın</label><input type="text" id="p-name" value="${esc(s.learner_name)}" autocomplete="given-name">
       <label>${esc(pack.nameTr)} seviyen <span class="hint">(${esc(pack.levelSystem)})</span></label>
       <select id="p-level">${lvOpts}</select>
-      ${cur.tracks.length > 1 ? `<label>Hangi programı çalışmak istiyorsun? <span class="hint">(sonra Üniteler ekranından değiştirebilirsin)</span></label>
-      <div class="kinds">${cur.tracks.map(t => `<label><input type="radio" name="track" value="${t.id}" ${t.id === cur.trackId() ? "checked" : ""}>
+      ${cur.tracks().length > 1 ? `<label>Hangi programı çalışmak istiyorsun? <span class="hint">(sonra Üniteler ekranından değiştirebilir, kendi programını da oluşturabilirsin)</span></label>
+      <div class="kinds">${cur.tracks().map(t => `<label><input type="radio" name="track" value="${t.id}" ${t.id === cur.trackId() ? "checked" : ""}>
         <span><b>${esc(t.title_tr)}</b><br><span class="muted">${esc(t.desc_tr)}</span></span></label>`).join("")}</div>` : ""}
       <label>Neden öğreniyorsun? <span class="hint">(birden fazla seçebilirsin)</span></label>
       <div class="kinds goals">${goals}</div>
@@ -643,6 +657,121 @@ function toggleMic() {
   });
 }
 
+// ================= ➕ kendi programını oluştur =================
+// Öğrenci ihtiyacını kendi sözleriyle anlatır → yapay zekâ ünite listesi önerir → öğrenci önizler, istersen
+// değişiklik ister → kaydeder. Program hafızada (ve yedekte) durur; "Devamını oluştur" ile yeni bölümler eklenir.
+const PROG_EXAMPLE = {
+  en: "Makine mühendisiyim. Fabrikamız için yurt dışından sabun üretim makinesi alacağız: tedarikçiyle tanışma, teknik şartnameyi konuşma, fiyat ve teslimat pazarlığı, fabrika kabul testi, kurulum ve operatör eğitimi.",
+  de: "Almanya'da bir hastanede hemşire olarak çalışmaya başlayacağım: hasta ile konuşma, nöbet devri, doktora durum bildirme, ilaç ve dozlar.",
+  ja: "JLPT N3 sınavına hazırlanıyorum; sınavdaki dinleme ve okuma konularını (iş yeri, okul, duyurular) konuşarak çalışmak istiyorum.",
+}[pack.code] || "";
+
+function showProgramCreate() {
+  setMode("progcreate", "➕ Program oluştur");
+  const pr = store.profile();
+  ui.content.innerHTML = `<h2>➕ Kendi programını oluştur</h2>
+    <div class="muted">Neden ${esc(pack.nameTr)} konuşman gerektiğini anlat; ${esc(S().character_name)} sana özel bir ünite listesi
+      önersin. Konu ne kadar özel olursa olsun olur. Öneriyi görüp değiştirebilir, sonra "Devamını oluştur" ile programını büyütebilirsin.</div>
+    <div class="form">
+      <label>Ne için çalışmak istiyorsun?</label>
+      <textarea id="pg-req" style="min-height:130px" placeholder="${esc("Ör. " + PROG_EXAMPLE)}">${esc(state.progDraft?.request || "")}</textarea>
+      <label>Kaç ünite olsun?</label>
+      <select id="pg-count">${[6, 8, 12].map(n => `<option ${n === (state.progDraft?.count || 8) ? "selected" : ""}>${n}</option>`).join("")}</select>
+      <div class="hint">Seviyen: ${esc(store.get("level_estimate") || pr.level_self || "bilinmiyor")} (profilinden). Öneri 20-60 saniye sürer.</div>
+      <button class="btn warm" data-act="prog-propose">✨ Program öner</button>
+      <label class="btn alt" style="margin-top:6px">📂 Dosyadan program yükle<input type="file" id="pg-import" accept=".json,application/json" hidden></label>
+    </div>
+    <div id="pg-out"></div>`;
+  $("#pg-import").onchange = importProgramFile;
+}
+
+function proposalHTML(p) {
+  return `<div class="card"><h3 style="margin-top:0">${esc(p.title_tr)}</h3><div class="muted">${esc(p.desc_tr)}</div>
+    ${p.levels.map(lv => `<h3>${esc(lv.title_tr)} <span class="muted">(${esc(lv.band)})</span></h3><ol class="pg-units">${lv.units.map(u =>
+      `<li><b>${esc(u.title)}</b> · ${esc(u.title_tr)}<br><span class="muted">${esc(u.scenario_tr)}</span></li>`).join("")}</ol>`).join("")}</div>`;
+}
+
+async function proposeProgram(change = null) {
+  const request = (change === null ? $("#pg-req")?.value : state.progDraft?.request || "").trim();
+  if (request.length < 10) { toast("Biraz daha ayrıntılı anlat (birkaç cümle)."); return; }
+  if (!store.apiKey()) { showError(new LLMError("API_KEY_MISSING")); return; }
+  const count = Number($("#pg-count")?.value || state.progDraft?.count || 8);
+  state.progDraft = { ...(state.progDraft || {}), request, count };
+  const out = $("#pg-out");
+  out.innerHTML = `<div class="card">⏳ <b>Program hazırlanıyor…</b> 20-60 saniye sürebilir.</div>`;
+  setBusy(true);
+  const g = state.gen;
+  try {
+    const p = await tutor.proposeProgram({ request, count, previous: change !== null ? state.progDraft.proposal : null, change: change || "" });
+    if (g !== state.gen) return;
+    setBusy(false);
+    state.progDraft.proposal = p;
+    out.innerHTML = proposalHTML(p) + `<div class="form">
+      <button class="btn warm" data-act="prog-save">✅ Kaydet ve başla</button>
+      <label>Değiştirmek istediğin bir şey var mı? <span class="hint">(ör. "pazarlık ünitesi daha erken gelsin, e-posta yazmayı da ekle")</span></label>
+      <input type="text" id="pg-change"><button class="btn alt" data-act="prog-revise">🔁 Bu isteğe göre yeniden öner</button></div>`;
+    out.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e) { if (g === state.gen) { setBusy(false); out.innerHTML = errorCard(e.message, String(e.message).includes("401")); } }
+}
+
+function saveProgramDraft() {
+  const d = state.progDraft;
+  if (!d?.proposal) return;
+  const t = tutor.saveProgram(d.proposal, d.request);
+  state.progDraft = null;
+  toast(`⭐ "${t.title_tr}" programı kaydedildi.`);
+  showUnits();
+}
+
+function importProgramFile(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  file.text().then(t => { const tr = tutor.importProgram(t); toast(`⭐ "${tr.title_tr}" yüklendi.`); showUnits(); })
+    .catch(err => toast("Program yüklenemedi: " + err.message, 6000));
+}
+
+function progMoreForm() {
+  $("#prog-more-box").innerHTML = `<div class="card form"><b>➕ Programa yeni bölüm ekle</b>
+    <div class="hint">${esc(S().character_name)}, tamamladığın ünitelere ve hatalarına bakıp programı bir adım ileri taşıyan yeni üniteler önerir.</div>
+    <label>Neye odaklanalım? <span class="hint">(isteğe bağlı)</span></label><input type="text" id="pm-focus" placeholder="Ör. telefonda arıza bildirme, garanti şartları">
+    <label>Kaç ünite?</label><select id="pm-count"><option>4</option><option selected>6</option><option>8</option></select>
+    <button class="btn warm" data-act="prog-more-go">✨ Öner</button><div id="pm-out"></div></div>`;
+}
+
+async function progMoreGo() {
+  if (!store.apiKey()) { showError(new LLMError("API_KEY_MISSING")); return; }
+  const out = $("#pm-out");
+  out.innerHTML = `<div class="muted">⏳ Yeni üniteler hazırlanıyor… (20-40 sn)</div>`;
+  setBusy(true);
+  const g = state.gen;
+  try {
+    const lv = await tutor.proposeMore(cur.trackId(), { count: Number($("#pm-count").value), focus: $("#pm-focus").value.trim() });
+    if (g !== state.gen) return;
+    setBusy(false);
+    state.moreDraft = lv;
+    out.innerHTML = proposalHTML({ title_tr: lv.title_tr, desc_tr: "", levels: [lv] }) +
+      `<button class="btn warm" data-act="prog-more-save">✅ Programa ekle</button> <button class="btn alt" data-act="prog-more-go">🔁 Başka öneri</button>`;
+  } catch (e) { if (g === state.gen) { setBusy(false); out.innerHTML = errorCard(e.message); } }
+}
+
+function progAct(act) {
+  const t = cur.track();
+  if (!t?.custom) return;
+  if (act === "prog-more") progMoreForm();
+  else if (act === "prog-more-go") progMoreGo();
+  else if (act === "prog-more-save") { if (state.moreDraft) { tutor.addLevel(t.id, state.moreDraft); state.moreDraft = null; toast("Yeni bölüm eklendi."); showUnits(); } }
+  else if (act === "prog-rename") {
+    const name = prompt("Programın yeni adı:", t.title_tr);
+    if (name && name.trim()) { const c = structuredClone(store.customTracks().find(x => x.id === t.id)); c.title_tr = name.trim().slice(0, 120); store.saveCustomTrack(c); showUnits(); }
+  }
+  else if (act === "prog-export") shareFile(`kotonoha-${pack.code}-program-${t.title_tr.replace(/[^\p{L}\p{N}]+/gu, "-").slice(0, 40)}.json`, tutor.exportProgram(t.id));
+  else if (act === "prog-delete") {
+    if (confirm(`"${t.title_tr}" programı, ünite içerikleri ve bu programdaki ilerlemen silinsin mi? (Geri alınamaz; istersen önce "Programı paylaş" ile dosyaya kaydet.)`)) {
+      store.deleteCustomTrack(t.id); toast("Program silindi."); showUnits();
+    }
+  }
+}
+
 // ================= 📘 üniteler =================
 // Her ünite 6 adım: sahne → kelimeler → dilbilgisi → rol yapma → yazma → değerlendirme.
 // İçerik ilk açılışta yapay zekâyla öğrencinin seviyesine/profiline göre üretilir ve cihazda saklanır.
@@ -655,9 +784,16 @@ function showUnits() {
   const done = store.completedUnits();
   const next = cur.nextUnit(done);
   const st = store.vocabStats();
-  const trackPicker = cur.tracks.length > 1 ? `<div class="tracks">Program: ${cur.tracks.map(t =>
-    `<button class="step-pill${t.id === cur.trackId() ? " on done" : ""}" data-act="track" data-track="${t.id}">${esc(t.title_tr)}</button>`).join(" ")}
-    <div class="muted">${esc(cur.track().desc_tr)}</div></div>` : "";
+  const t = cur.track();
+  const trackPicker = `<div class="tracks">Program: ${cur.tracks().map(x =>
+    `<button class="step-pill${x.id === t.id ? " on done" : ""}" data-act="track" data-track="${x.id}">${x.custom ? "⭐ " : ""}${esc(x.title_tr)}</button>`).join(" ")}
+    <button class="step-pill add" data-act="prog-new">➕ Program oluştur</button>
+    <div class="muted">${esc(t.desc_tr || "")}</div>
+    ${t.custom ? `<div class="prog-acts">
+      <button class="btn" data-act="prog-more">➕ Devamını oluştur</button>
+      <button class="btn alt" data-act="prog-rename">✏️ Adını değiştir</button>
+      <button class="btn alt" data-act="prog-export">⬇ Programı paylaş</button>
+      <button class="btn alt" data-act="prog-delete">🗑 Sil</button></div><div id="prog-more-box"></div>` : ""}</div>`;
   let html = `<h2>Üniteler · ${esc(pack.nameTr)}</h2>${trackPicker}
     <div class="muted">Her ünite bir konuşma senaryosu: ${cur.steps.map(s => esc(s.tr)).join(" → ")}.
       İçerik ilk açılışta senin seviyene ve hedeflerine göre hazırlanır (30-60 sn), sonra cihazda saklanır.
@@ -689,7 +825,8 @@ function unitHeader(u, current) {
     <div class="muted">🎯 ${esc(u.can_do_tr)}</div><div class="steps">${pills}</div>`;
 }
 const regenLink = () => `<div class="muted" style="margin-top:24px">İçerik beğenilmediyse:
-  <button class="linkish" data-act="unit-regen">üniteyi yeniden üret</button></div>`;
+  <button class="linkish" data-act="unit-regen">üniteyi yeniden üret</button>${cur.unit(state.unitId)?.custom
+    ? ` · <button class="linkish" data-act="unit-remove">bu üniteyi programdan çıkar</button>` : ""}</div>`;
 
 async function openUnit(uid, regenerate = false) {
   const u = cur.unit(uid);
@@ -1063,18 +1200,19 @@ function showSettings(guideOpen = null) {
     <div class="hint">Konuşma modunda: ⏸ duraklat · 🔁 son cümleyi yavaşça tekrarla · ✋ Bekle (geri sayımı durdurur) ·
       🗑 söylediğini sil. "えーと / ähm / um" gibi duraksama sözcükleriyle biterse kendiliğinden daha uzun beklenir.</div>
     <button class="btn alt" data-act="test-voice">▶ Dene</button>
-    ${voices.length || !speech.voicesKnown() ? "" : `<div class="hint">${esc(pack.nameTr)} ses bulunamadı. iPad: Ayarlar → Erişilebilirlik → Seslendirilen İçerik → Sesler → ${esc(pack.nameTr)}.</div>`}
+    ${voices.length || !speech.voicesKnown() ? "" : `<div class="hint">${esc(pack.nameTr)} ses bulunamadı. ${voiceHelp()}</div>`}
   </div>
   <div class="card" id="backup-card"><b>Yedekleme</b>
     ${cloudBlock()}
-    <div class="hint" style="margin-top:10px"><b>Dosyaya yedek</b> (Drive'dan bağımsız; iPad'de "Dosyalar'a Kaydet" → iCloud Drive).
+    <div class="hint" style="margin-top:10px"><b>Dosyaya yedek</b> (Drive'dan bağımsız; ${fileSaveHint}).
       Her dilin yedeği ayrıdır; API anahtarı yedeğe girmez.</div>
+    <div id="st-info" class="hint"></div>
     <button class="btn alt" data-act="export">⬇ Yedeği dosyaya al</button>
     <label class="btn alt" style="margin-top:6px">⬆ Dosyadan geri yükle<input type="file" id="f-import" accept=".json,application/json" hidden></label>
   </div>
   <button class="btn warm" data-act="save-settings">Kaydet</button>
   <div class="card"><b>Diğer diller</b>
-    <div class="hint">Her dilin kendi simgesi ve ayrı hafızası var. iPad'de açınca Paylaş → Ana Ekrana Ekle ile ayrı simge olarak eklenir.</div>
+    <div class="hint">Her dilin kendi simgesi ve ayrı hafızası var. Açınca ${addHomeHint} ile ayrı simge olarak eklenir.</div>
     ${others}
   </div>
   <details class="card"><summary><b>🔧 Ses günlüğü</b> <span class="hint">(ses sorunu olursa ekran görüntüsünü gönder)</span></summary>
@@ -1093,6 +1231,12 @@ function showSettings(guideOpen = null) {
   $("#f-voice").onchange = e => store.setSetting("voice_on", e.target.checked);
   $("#f-vsend").onchange = e => { store.setSetting("voice_send", e.target.value); vm.manual = e.target.value === "manual"; store.saveNow(); };
   $("#f-import").onchange = importBackup;
+  store.storageInfo().then(i => {
+    const kb = n => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB";
+    const el = $("#st-info");
+    if (el) el.textContent = `Bu cihazdaki ${pack.nameTr} hafızası: ${kb(i.bytes)} · depo: ${i.backend === "indexedDB" ? "IndexedDB (geniş)" : "localStorage (~5 MB sınırlı)"}`
+      + (i.quota ? ` · kullanılabilir alan: ${kb(i.quota)}` : "") + (i.persisted ? " · kalıcı ✓" : "");
+  });
 }
 
 // ---------- ☁️ Drive yedeği ----------
@@ -1229,22 +1373,28 @@ function testVoice() {
   });
 }
 
-async function exportBackup() {
-  const name = `kotonoha-${pack.code}-yedek-${new Date().toISOString().slice(0, 10)}.json`;
-  const blob = new Blob([store.exportJSON()], { type: "application/json" });
-  // iPad: paylaşım menüsü → "Dosyalar'a Kaydet" (iCloud Drive). Bilgisayar: İndirilenler.
+// iPad / Android: paylaşım menüsü ("Dosyalar'a Kaydet", Google Drive, WhatsApp, AirDrop…).
+// Bilgisayar: İndirilenler klasörü. Dönüş: false = kullanıcı vazgeçti.
+async function shareFile(name, text) {
+  const blob = new Blob([text], { type: "application/json" });
   const file = typeof File !== "undefined" ? new File([blob], name, { type: "application/json" }) : null;
-  if (file && navigator.canShare?.({ files: [file] }) && /iPad|iPhone|Macintosh/.test(navigator.userAgent) && "ontouchend" in document) {
-    try { await navigator.share({ files: [file], title: name }); cloud.markFileBackup(); refreshAfterBackup(); return; }
-    catch (e) { if (e.name === "AbortError") return; /* paylaşım olmazsa indirmeye düş */ }
+  if (file && (IS_IOS || IS_ANDROID) && navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return true; }
+    catch (e) { if (e.name === "AbortError") return false; /* paylaşım olmazsa indirmeye düş */ }
   }
-  cloud.markFileBackup();
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = name;
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  return true;
+}
+
+async function exportBackup() {
+  const name = `kotonoha-${pack.code}-yedek-${new Date().toISOString().slice(0, 10)}.json`;
+  if (!(await shareFile(name, store.exportJSON()))) return;
+  cloud.markFileBackup();
   refreshAfterBackup();
 }
 function refreshAfterBackup() { if (state.mode === "home") showHome(); }
@@ -1282,6 +1432,14 @@ ui.content.addEventListener("click", e => {
   else if (act === "unit") openUnit(t.dataset.unit);
   else if (act === "units-list") showUnits();
   else if (act === "track") { cur.setTrack(t.dataset.track); showUnits(); }
+  else if (act === "prog-new") showProgramCreate();
+  else if (act === "prog-propose") proposeProgram();
+  else if (act === "prog-revise") proposeProgram($("#pg-change")?.value.trim() || "");
+  else if (act === "prog-save") saveProgramDraft();
+  else if (act.startsWith("prog-")) progAct(act);
+  else if (act === "unit-remove") {
+    if (confirm("Bu ünite programdan çıkarılsın mı? (İçeriği ve ilerlemesi silinir.)")) { tutor.removeUnit(state.unitId); toast("Ünite çıkarıldı."); showUnits(); }
+  }
   else if (act === "step") { if (state.content) openStep(t.dataset.step); }
   else if (act === "unit-next") unitNext();
   else if (act === "unit-regen") { if (confirm("Bu ünitenin içeriği yeniden üretilsin mi? (İlerlemen silinmez.)")) openUnit(state.unitId, true); }
@@ -1313,7 +1471,11 @@ ui.content.addEventListener("click", e => {
   else if (act === "copy-code") copyCode();
   else if (act === "backup-later") { cloud.snoozeFileBackup(); showHome(); }
   else if (act === "restore-code") restoreWithCode();
-  else if (act === "cloud-on") { store.setSetting("backup_code", cloud.newCode()); store.set("code_note_pending", true); store.saveNow(); cloudNow(); }
+  else if (act === "cloud-on") {
+    store.setSetting("backup_code", cloud.newCode()); store.set("code_note_pending", true); store.saveNow();
+    if (state.mode === "home") showHome();          // soru kartı yerine yedek kodu kartı görünsün
+    cloudNow();
+  }
   else if (act === "cloud-decline") { store.set("cloud_declined", true); store.saveNow(); showHome(); toast("Tamam. İstersen sonra ⚙️ Ayarlar → Yedekleme'den açabilirsin.", 5000); }
   else if (act === "cloud-link") cloudLinkForm();
   else if (act === "cloud-link-go") cloudLinkGo();
@@ -1361,6 +1523,9 @@ ui.furi?.addEventListener("change", () => {
 document.addEventListener("pointerdown", () => speech.unlock(), { capture: true });
 document.addEventListener("keydown", () => speech.unlock(), { capture: true });
 document.addEventListener("visibilitychange", () => { if (document.hidden) store.saveNow(); });
+
+// Kayıt başarısız olursa (depo dolu, tarayıcı izin vermedi…) sessiz kalma: kullanıcı yedek alsın.
+store.onSaveError(e => toast(`⚠️ Hafıza bu cihaza kaydedilemedi (${e?.name || "hata"}). ⚙️ Ayarlar → Yedekleme'den hemen yedek al.`, 12000));
 
 // ================= başlangıç =================
 applySettings();

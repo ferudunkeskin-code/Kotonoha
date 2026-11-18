@@ -228,7 +228,7 @@ export class VoiceMode {
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
         this.stop();
         this.cb.onError?.(e.error === "not-allowed" ? "Mikrofon izni verilmedi."
-          : "Konuşma tanıma kapalı (iPad: Ayarlar → Genel → Klavye → Dikte'yi açın).");
+          : "Konuşma tanıma kapalı (iPad: Ayarlar → Genel → Klavye → Dikte'yi açın; Android: Google uygulamasının mikrofon iznini açın).");
       }
       // "no-speech", "aborted" vb.: onend'de yeniden başlatılır
     };

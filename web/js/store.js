@@ -1,4 +1,5 @@
-// Kotonoha hafızası — tarayıcının kendi deposunda (localStorage), yalnızca bu cihazda.
+// Kotonoha hafızası — yalnızca bu cihazda. Asıl depo IndexedDB (büyük; iPad'de yüzlerce MB), o yoksa localStorage
+// (~5 MB, üç dil paylaşır). 0.8'e kadar her şey localStorage'daydı; ilk açılışta kendiliğinden IndexedDB'ye taşınır.
 // Her dilin hafızası ayrıdır: "kotonoha-v1-ja", "kotonoha-v1-de", "kotonoha-v1-en".
 // API anahtarları ve yapay zekâ seçimi dillerin ORTAK deposunda durur ("kotonoha-shared"):
 // aynı tarayıcıda bir kez girmek yeter. (iPad'de ana ekrana eklenen her uygulamanın deposu
@@ -32,7 +33,7 @@ export const DEFAULT_SETTINGS = {
 function blank() {
   return {
     settings: { ...DEFAULT_SETTINGS, profile: blankProfile() }, kv: {}, sessions: [], messages: [], facts: [],
-    mistakes: [], vocab: [], unit_content: {}, unit_progress: {}, next_id: 1, rev: 0,
+    mistakes: [], vocab: [], unit_content: {}, unit_progress: {}, custom_tracks: [], next_id: 1, rev: 0,
   };
 }
 
@@ -88,8 +89,7 @@ export function migrateLegacy() {
   }
 }
 
-function load() {
-  const d = readJSON(KEY);
+function normalize(d) {
   const b = blank();
   if (!d) return b;
   const st = { ...b.settings, ...(d.settings || {}) };
@@ -102,13 +102,70 @@ function loadShared() {
   return { ...DEFAULT_SHARED, ...(readJSON(SHARED_KEY) || {}) };
 }
 
-let db, shared;
-export function init() {
-  try { migrateLegacy(); } catch (e) { console.error(e); }
-  db = load();
-  shared = loadShared();
+// ---------- kalıcı depo: IndexedDB ----------
+const IDB_NAME = "kotonoha", IDB_STORE = "kv";
+let idb = null;
+function openIDB() {
+  return new Promise(res => {
+    if (!globalThis.indexedDB) { res(null); return; }
+    try {
+      const r = indexedDB.open(IDB_NAME, 1);
+      r.onupgradeneeded = () => r.result.createObjectStore(IDB_STORE);
+      r.onsuccess = () => res(r.result);
+      r.onerror = r.onblocked = () => res(null);
+    } catch (e) { res(null); }
+  });
 }
-init();
+const idbGet = key => new Promise(res => {
+  try { const q = idb.transaction(IDB_STORE).objectStore(IDB_STORE).get(key); q.onsuccess = () => res(q.result ?? null); q.onerror = () => res(null); }
+  catch (e) { res(null); }
+});
+const idbPut = (key, val) => new Promise((res, rej) => {
+  try {
+    const tx = idb.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).put(val, key);
+    tx.oncomplete = () => res(true);
+    tx.onerror = tx.onabort = () => rej(tx.error || new Error("IndexedDB yazılamadı"));
+  } catch (e) { rej(e); }
+});
+
+let db, shared;
+export let backend = "localStorage";
+// Uygulama hafızayı kullanmadan önce bunu bekler (app.js: await store.ready).
+export const ready = (async () => {
+  try { migrateLegacy(); } catch (e) { console.error(e); }
+  shared = loadShared();                                   // anahtarlar küçük: localStorage'da kalır
+  idb = await openIDB();
+  let d = null;
+  if (idb) {
+    const raw = await idbGet(KEY);
+    if (raw) d = typeof raw === "string" ? JSON.parse(raw) : raw;
+    else {
+      const old = readJSON(KEY);                           // localStorage'daki eski hafızayı taşı
+      if (old) {
+        try {
+          const json = JSON.stringify(old);
+          await idbPut(KEY, json);
+          if ((await idbGet(KEY)) === json) LS().removeItem(KEY);   // yerine yazıldığı doğrulanınca yer aç
+          d = old;
+        } catch (e) { console.error("IndexedDB'ye taşınamadı", e); idb = null; d = old; }
+      }
+    }
+    if (idb) backend = "indexedDB";
+  } else d = readJSON(KEY);
+  db = normalize(d);
+})();
+
+let saveError = null;
+const errListeners = [];
+export const onSaveError = f => errListeners.push(f);
+function reportSave(e) {
+  const first = !saveError;
+  saveError = e;
+  console.error("hafıza yazılamadı", e);
+  if (first) errListeners.forEach(f => f(e));
+}
+export const lastSaveError = () => saveError;
 
 let saveTimer = null;
 
@@ -121,16 +178,24 @@ function save() {
 export function saveNow() {
   clearTimeout(saveTimer);
   trim();
-  try {
-    LS().setItem(KEY, JSON.stringify(db));
-    LS().setItem(SHARED_KEY, JSON.stringify(shared));
-  } catch (e) { console.error("hafıza yazılamadı", e); }
+  const json = JSON.stringify(db);
+  if (idb) idbPut(KEY, json).then(() => { saveError = null; }).catch(reportSave);
+  else { try { LS().setItem(KEY, json); saveError = null; } catch (e) { reportSave(e); } }
+  try { LS().setItem(SHARED_KEY, JSON.stringify(shared)); } catch (e) { /* küçük; nadiren */ }
+}
+
+// Ayarlar'da gösterilen depo bilgisi
+export async function storageInfo() {
+  const out = { backend, bytes: JSON.stringify(db).length };
+  try { const e = await navigator.storage?.estimate?.(); if (e) { out.usage = e.usage; out.quota = e.quota; } } catch (e) { /* */ }
+  try { out.persisted = await navigator.storage?.persisted?.(); } catch (e) { /* */ }
+  return out;
 }
 
 function trim() {
   // Depo sınırını aşmamak için: özeti çıkarılmış eski oturumların mesajlarını sil.
-  // (localStorage sınırı ~5 MB ve üç dil aynı sınırı paylaşıyor.)
-  if (db.messages.length <= 2500) return;
+  // (IndexedDB'de yer bol; yine de hafıza sınırsız büyümesin.)
+  if (db.messages.length <= (idb ? 6000 : 2500)) return;
   const keep = new Set(db.sessions.slice(-40).map(s => s.id));
   const summarized = new Set(db.sessions.filter(s => s.summarized).map(s => s.id));
   db.messages = db.messages.filter(m => keep.has(m.session_id) || !summarized.has(m.session_id));
@@ -253,6 +318,25 @@ export function vocabStats() {
            due: db.vocab.filter(w => w.due <= n).length };
 }
 
+// ---------- kullanıcının kendi programları ----------
+// { id, title_tr, desc_tr, request_tr, created, levels: [{ id, title_tr, band, units: [...] }] }
+// Ünite tanımları yerleşik programlarla aynı biçimde; içerikleri ilk açılışta üretilir (unit_content).
+export const customTracks = () => db.custom_tracks || [];
+export function saveCustomTrack(t) {
+  const list = (db.custom_tracks ||= []);
+  const i = list.findIndex(x => x.id === t.id);
+  if (i >= 0) list[i] = t; else list.push(t);
+  save();
+}
+export function deleteCustomTrack(id) {
+  const t = customTracks().find(x => x.id === id);
+  if (!t) return;
+  for (const lv of t.levels) for (const u of lv.units) { delete db.unit_content[u.id]; delete db.unit_progress[u.id]; }
+  db.custom_tracks = customTracks().filter(x => x.id !== id);
+  if (db.settings.track === id) delete db.settings.track;
+  save();
+}
+
 // ---------- üniteler ----------
 // unit_content[ünite] = yapay zekânın ürettiği içerik (bir kez üretilir, cihazda saklanır)
 // unit_progress[ünite] = { adım: puan (0–1) } ; değerlendirme (quiz) ≥ 0.7 → ünite tamam
@@ -340,3 +424,4 @@ export function importJSON(text) {
 
 // Testler için
 export function _reset() { db = blank(); shared = { ...DEFAULT_SHARED }; }
+export const _ready = () => ready;
