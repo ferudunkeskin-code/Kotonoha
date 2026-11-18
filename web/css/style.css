@@ -201,3 +201,5 @@ details.guide .btn { font-size: 15px; padding: 7px 14px; }
 /* "Türkçe" kutusu işaretliyken bütün çeviriler açık: satır başına "Türkçesi" düğmesi gereksiz ve yanıltıcı */
 body.show-tr .toggle[data-act="tr"] { display: none; }
 .toggle[data-act="tr"] { border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; margin-left: 4px; }
+.tracks { margin: 8px 0 4px; }
+.tracks .step-pill { margin: 3px 2px; }

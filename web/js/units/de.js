@@ -10,7 +10,9 @@ export default {
     { id: "writing", tl: "Schreiben", tr: "Yazma" },
     { id: "quiz", tl: "Test", tr: "Değerlendirme" },
   ],
-  levels: [
+  tracks: [{
+    id: "studium", title_tr: "Almanya'da mühendislik", desc_tr: "Hazırlık sınıfı, üniversite hayatı ve teknik Almanca.",
+    levels: [
     {
       id: "L1", title_tr: "Seviye 1 · Almanya'ya Varış", band: "A1–A2",
       units: [
@@ -122,5 +124,5 @@ export default {
           grammar: ["Sicherheit im Satzbau (Verbposition)", "Rückfragen: Habe ich richtig verstanden …?", "Zeitgewinn: Das ist eine gute Frage"] },
       ],
     },
-  ],
+  ]}],
 };

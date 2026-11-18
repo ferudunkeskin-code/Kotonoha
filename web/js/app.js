@@ -13,7 +13,7 @@ import * as cloud from "./cloud.js";
 import * as cur from "./curriculum.js";
 import * as P from "./prompts.js";
 
-export const APP_VERSION = "0.6.3-web";
+export const APP_VERSION = "0.7.0-web";
 const ROOT = new URL("../", import.meta.url);      // sitenin kökü (web/), dil klasöründen bağımsız
 const esc = furi.esc;
 const $ = s => document.querySelector(s);
@@ -172,7 +172,13 @@ function showHome() {
   if (!store.apiKey()) html += `<div class="card warn">Başlamak için <b>⚙️ Ayarlar</b>'dan bir API anahtarı girin.
     Anahtarın yoksa nasıl alınacağı orada adım adım anlatılıyor.
     <br><button class="btn" data-nav="settings">Ayarlara git</button><button class="btn alt" data-act="key-guide">🔑 Anahtar nasıl alınır?</button></div>`;
-  if (store.get("code_note_pending") && cloud.enabled()) html += `<div class="card ok">☁️ <b>Hafızan artık Google Drive'a
+  if (cloudOffered()) html += `<div class="card">☁️ <b>Hafızanı Google Drive'a yedekleyelim mi?</b>
+    Uygulamayı silersen ya da yeni bir cihaza geçersen hafızan bir kodla geri gelir.
+    <div class="hint">Yedekler, Kotonoha'yı paylaşan kişinin (${esc(cloud.owner())}) Google Drive'ında saklanır;
+      sohbetlerin de yedeğin içindedir, API anahtarın girmez. Onu tanımıyorsan ya da istemiyorsan "Hayır" de;
+      ⚙️ Ayarlar → Yedekleme'den dosyaya yedek alabilirsin.</div>
+    <button class="btn" data-act="cloud-on">Evet, yedekle</button> <button class="btn alt" data-act="cloud-decline">Hayır</button></div>`;
+  else if (store.get("code_note_pending") && cloud.enabled()) html += `<div class="card ok">☁️ <b>Hafızan artık Google Drive'a
     kendiliğinden yedekleniyor.</b> Uygulamayı silsen ya da yeni bir cihaza geçsen bile bu kodla geri yükleyebilirsin:
     <br><span class="code-box">${esc(cloud.code())}</span>
     <div class="hint">Kodu bir yere not et (Notlar, ekran görüntüsü…). Sonra da ⚙️ Ayarlar → Yedekleme'de görünür.</div>
@@ -220,6 +226,9 @@ function showProfile(first = false) {
       <label>Adın</label><input type="text" id="p-name" value="${esc(s.learner_name)}" autocomplete="given-name">
       <label>${esc(pack.nameTr)} seviyen <span class="hint">(${esc(pack.levelSystem)})</span></label>
       <select id="p-level">${lvOpts}</select>
+      ${cur.tracks.length > 1 ? `<label>Hangi programı çalışmak istiyorsun? <span class="hint">(sonra Üniteler ekranından değiştirebilirsin)</span></label>
+      <div class="kinds">${cur.tracks.map(t => `<label><input type="radio" name="track" value="${t.id}" ${t.id === cur.trackId() ? "checked" : ""}>
+        <span><b>${esc(t.title_tr)}</b><br><span class="muted">${esc(t.desc_tr)}</span></span></label>`).join("")}</div>` : ""}
       <label>Neden öğreniyorsun? <span class="hint">(birden fazla seçebilirsin)</span></label>
       <div class="kinds goals">${goals}</div>
       <label>Kendinden biraz bahset <span class="hint">(isteğe bağlı)</span></label>
@@ -263,6 +272,8 @@ function saveProfile() {
     level_self: $("#p-level").value, goals,
     about: $("#p-about").value.trim().slice(0, 600), interests: $("#p-interests").value.trim().slice(0, 300),
   });
+  const tr = document.querySelector('input[name="track"]:checked')?.value;
+  if (tr) cur.setTrack(tr);
   store.setSetting("profile_done", true);
   ensureBackupCode();
   store.saveNow();
@@ -299,6 +310,7 @@ const KINDS = () => ({
   exam: ["🎓 Sözlü sınav provası", `${S().character_name} öğretmen olur; metinle ilgili sorular sorar, cevaplarını değerlendirir, sonunda genel bir değerlendirme yapar.`],
   talk: ["💬 Metin hakkında sohbet", "Metnin konusunu doğal bir sohbette konuşursunuz; metindeki kelime ve kalıpları kullanmaya teşvik eder."],
   read: ["📖 Sesli okuma", "Metni yüksek sesle okursun (🎤 ya da 🎧 ile); takıldığın ya da yanlış okuduğun yerleri söyler."],
+  present: ["🎤 Proje sunumu provası", `${S().character_name} jüri ya da dinleyici olur: projeni sunarsın, metne dayanan sorular sorar, anlatımını ve dilini değerlendirir. Metin olarak proje özetini ya da sunum notlarını yapıştır.`],
 });
 const MAX_TEXT = 6000;
 
@@ -309,7 +321,7 @@ function showTextSetup() {
   const radios = Object.entries(KINDS()).map(([k, [t, d]]) =>
     `<label><input type="radio" name="kind" value="${k}" ${k === kind ? "checked" : ""}><span><b>${t}</b><br><span class="muted">${esc(d)}</span></span></label>`).join("");
   ui.content.innerHTML = `<h2>${esc(pack.titles.text)} · Metinle çalış</h2>
-    <div class="muted">Çalışmak istediğin ${esc(pack.nameTr)} metni aşağıya yapıştır (sınav metni, ders metni, konuşma konusu…).
+    <div class="muted">Çalışmak istediğin ${esc(pack.nameTr)} metni aşağıya yapıştır (sınav metni, ders metni, proje özeti, sunum notları…).
     Metin yalnızca bu cihazda saklanır.</div>
     <div class="form">
       <label>Metin</label>
@@ -334,7 +346,8 @@ function startText(text, kind) {
   store.set("study_kind", kind);
   const kinds = KINDS();
   setMode("text", "📄 " + kinds[kind][0].slice(2).trim());
-  setInput(true, kind === "read" ? "🎤 ya da 🎧 ile metni oku… (yazabilirsin de)" : "Cevabını yaz ya da 🎧 ile konuş…");
+  setInput(true, kind === "read" ? "🎤 ya da 🎧 ile metni oku… (yazabilirsin de)"
+    : kind === "present" ? "Projeni sun: yaz, 🎤 ya da 🎧 ile konuş…" : "Cevabını yaz ya da 🎧 ile konuş…");
   state.sessionId = store.newSession("text:" + kind);
   state.task = TEXT_TASKS[kind](text);
   const sents = pack.splitSentences(text).map(s => ({ s, i: addSpeak(s) }));
@@ -642,13 +655,16 @@ function showUnits() {
   const done = store.completedUnits();
   const next = cur.nextUnit(done);
   const st = store.vocabStats();
-  let html = `<h2>Üniteler · ${esc(pack.nameTr)}</h2>
+  const trackPicker = cur.tracks.length > 1 ? `<div class="tracks">Program: ${cur.tracks.map(t =>
+    `<button class="step-pill${t.id === cur.trackId() ? " on done" : ""}" data-act="track" data-track="${t.id}">${esc(t.title_tr)}</button>`).join(" ")}
+    <div class="muted">${esc(cur.track().desc_tr)}</div></div>` : "";
+  let html = `<h2>Üniteler · ${esc(pack.nameTr)}</h2>${trackPicker}
     <div class="muted">Her ünite bir konuşma senaryosu: ${cur.steps.map(s => esc(s.tr)).join(" → ")}.
       İçerik ilk açılışta senin seviyene ve hedeflerine göre hazırlanır (30-60 sn), sonra cihazda saklanır.
       Değerlendirmede %70 ve üstü üniteyi tamamlar; istediğin üniteden başlayabilirsin.</div>
     <div class="card">🔁 Tekrar bekleyen kelime: <b>${st.due}</b> · toplam ${st.total}
       <button class="btn ${st.due ? "" : "alt"}" data-act="review">Kelime tekrarı</button></div>`;
-  for (const lv of cur.levels) {
+  for (const lv of cur.levels()) {
     html += `<h3>${esc(lv.title_tr)} <span class="muted">(${esc(lv.band)})</span></h3><div class="unit-list">`;
     for (const u of lv.units) {
       const n = Object.keys(store.unitStepsDone(u.id)).length;
@@ -937,7 +953,7 @@ function showProgress() {
   ui.content.innerHTML = `<h2>İlerleme · ${esc(pack.nameTr)}</h2>
     ${state.summarizing ? '<div class="card muted">⏳ Son sohbetin özeti çıkarılıyor; bu sayfa birazdan kendini yenileyecek.</div>' : ""}
     <div class="card"><b>Tahmini seviye:</b> ${esc(store.get("level_estimate") || "henüz belli değil")}</div>
-    <div class="card"><b>Üniteler:</b> ${Object.keys(store.completedUnits()).length} / ${cur.order.length} tamamlandı
+    <div class="card"><b>Üniteler:</b> ${cur.completedInTrack(store.completedUnits())} / ${cur.order().length} tamamlandı
       <button class="btn alt" data-nav="units">📘 Üniteler</button></div>
     <div class="card"><b>Kelimeler</b><br>Toplam ${st.total} · İyi bilinen ${st.known} · Tekrar bekleyen ${st.due}</div>
     <div class="card"><b>Sık yapılan hatalar</b>${mist ? `<table><tr><th>Tür</th><th>Sayı</th><th>Son örnek</th></tr>${mist}</table>`
@@ -1085,7 +1101,8 @@ const fmtTime = iso => iso ? new Date(iso).toLocaleString("tr-TR", { day: "numer
 function cloudBlock() {
   if (!cloud.configured()) return `<div class="hint">☁️ Google Drive yedeği bu sitede henüz kurulmadı.</div>`;
   if (!cloud.enabled()) return `<div>☁️ <b>Google Drive'a otomatik yedek: kapalı</b></div>
-    <div class="hint">Açınca hafızan arka planda Drive'a yedeklenir; uygulama silinse bile bir kodla geri gelir.</div>
+    <div class="hint">Açınca hafızan arka planda Drive'a yedeklenir; uygulama silinse bile bir kodla geri gelir.
+      Yedekler ${esc(cloud.owner())} adlı kişinin Google Drive'ında saklanır (sohbetler dahil, API anahtarı hariç).</div>
     <button class="btn" data-act="cloud-on">☁️ Drive yedeğini aç</button>
     <button class="btn alt" data-act="cloud-link">🔗 Kodum var, bağla</button>
     <div id="cloud-extra"></div>`;
@@ -1101,17 +1118,13 @@ function cloudBlock() {
       <button class="btn alt" data-act="cloud-off">Kapat</button>
     </div>
     <div id="cloud-extra"></div>
-    <div class="hint">Yedekler Kotonoha yöneticisinin Google Drive'ında, "Kotonoha Yedekleri" klasöründe saklanır; son 10 günün kopyası tutulur.</div>`;
+    <div class="hint">Yedekler ${esc(cloud.owner())} adlı kişinin Google Drive'ında, "Kotonoha Yedekleri" klasöründe saklanır; son 10 günün kopyası tutulur.</div>`;
 }
 
-function ensureBackupCode() {
-  // Drive kuruluysa ve hafızada bir şey varsa yedeği kendiliğinden aç (kodu kullanıcıya bir kez göster).
-  if (cloud.configured() && !cloud.code() && !store.isEmpty()) {
-    store.setSetting("backup_code", cloud.newCode());
-    store.set("code_note_pending", true);
-    store.saveNow();
-  }
-}
+// Drive yedeği kendiliğinden AÇILMAZ: yedekler başkasının (yöneticinin) Drive'ında durduğu için kullanıcıya
+// ana sayfada bir kez sorulur (cloud-offer kartı). Bu işlev yalnızca eski adıyla çağrılar bozulmasın diye duruyor.
+function ensureBackupCode() {}
+const cloudOffered = () => cloud.configured() && !cloud.code() && !store.isEmpty() && !store.get("cloud_declined");
 
 function copyCode() {
   const c = cloud.code();
@@ -1268,6 +1281,7 @@ ui.content.addEventListener("click", e => {
   if (act === "say") { const i = Number(t.dataset.i); state.playTok = null; if (state.speak[i]) speakText(state.speak[i], i, undefined, undefined, state.speakPitch?.[i] || 1); }
   else if (act === "unit") openUnit(t.dataset.unit);
   else if (act === "units-list") showUnits();
+  else if (act === "track") { cur.setTrack(t.dataset.track); showUnits(); }
   else if (act === "step") { if (state.content) openStep(t.dataset.step); }
   else if (act === "unit-next") unitNext();
   else if (act === "unit-regen") { if (confirm("Bu ünitenin içeriği yeniden üretilsin mi? (İlerlemen silinmez.)")) openUnit(state.unitId, true); }
@@ -1300,6 +1314,7 @@ ui.content.addEventListener("click", e => {
   else if (act === "backup-later") { cloud.snoozeFileBackup(); showHome(); }
   else if (act === "restore-code") restoreWithCode();
   else if (act === "cloud-on") { store.setSetting("backup_code", cloud.newCode()); store.set("code_note_pending", true); store.saveNow(); cloudNow(); }
+  else if (act === "cloud-decline") { store.set("cloud_declined", true); store.saveNow(); showHome(); toast("Tamam. İstersen sonra ⚙️ Ayarlar → Yedekleme'den açabilirsin.", 5000); }
   else if (act === "cloud-link") cloudLinkForm();
   else if (act === "cloud-link-go") cloudLinkGo();
   else if (act === "cloud-now") cloudNow();

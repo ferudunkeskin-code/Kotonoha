@@ -14,6 +14,7 @@ export const GOALS = {
   daily: "💬 Günlük konuşma",
   culture: "🎬 Kültür ve eğlence (dizi, film, müzik, kitap)",
   move: "🏠 O ülkede yaşamak",
+  present: "🎤 Sunum / proje (konferans, fuar, ortak okullar)",
 };
 const goalName = g => (GOALS[g] || g).replace(/^\S+\s/, "");
 
@@ -111,6 +112,20 @@ ${TEXT_BLOCK(text)}
   deneyimlerini sor. Metindeki önemli kelime ve kalıpları sohbette kullanmasını teşvik et.
 - Öğrenci metindeki bir kelimeyi ya da cümleyi sorarsa kısaca açıkla (açıklama Türkçe reply_tr'de olabilir).
 - İlk mesajında metnin konusunu bir cümleyle anıp ilk soruyu sor.
+`,
+  present: text => `MOD: Proje sunumu provası.
+Öğrenci aşağıdaki projeyi/sunumu ${L} sunmaya hazırlanıyor (uluslararası bir jüri, ortak okulların öğretmenleri,
+bir fuar ziyaretçisi ya da konferans dinleyicisi karşısında). Sen dinleyici ve jüri rolündesin: sıcak ama profesyonel ol.
+${TEXT_BLOCK(text)}
+- İlk mesajında kendini kısaca jüri üyesi olarak tanıt (insan olduğunu iddia etmeden, rol olarak) ve öğrenciden projesini
+  birkaç cümleyle sunmasını iste; isterse bölüm bölüm (amaç, yöntem, sonuç) sunabileceğini söyle.
+- Öğrenci sunduktan sonra: "reply" alanında kısa bir dinleyici tepkisi ve metne dayanan TEK bir jüri sorusu
+  (yöntem, sonuçlar, öğrencilerin katkısı, maliyet, sürdürülebilirlik, yaygınlaştırma, başka okullara uyarlanabilirlik…);
+  "reply_tr"de Türkçe kısa geri bildirim (anlaşılırlık ve yapı); en önemli tek dil hatasını "correction" ile düzelt.
+- Öğrenci cevap veremezse ya da Türkçe yardım isterse "reply_tr"de söyleyebileceği 1-2 örnek ${L} cümle ver.
+- Metindeki bilgileri doğru kabul et; metinde olmayan ayrıntıyı uydurma, öğrenciye sor.
+- Yaklaşık 5-6 sorudan sonra provayı bitir: "reply_tr"de Türkçe genel değerlendirme — güçlü yönler, geliştirilecek
+  2-3 nokta ve sunumda kullanabileceği 3 yararlı ${L} kalıp. Bu son mesajda "goal_reached": true olsun.
 `,
   read: text => `MOD: Sesli okuma kontrolü.
 ${TEXT_BLOCK(text)}

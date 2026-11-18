@@ -176,7 +176,7 @@ function summaryText(list, withHeader) {
       const ago = Math.floor((now - la) / 86400000);
       last = fmt(la, "dd.MM.yyyy HH:mm") + (ago === 0 ? " (bugün)" : ago === 1 ? " (dün)" : " (" + ago + " gün önce)");
     }
-    out.push(r.name + " · " + r.lang_name + "   [" + r.folder + "]");
+    out.push(r.name + " · " + r.lang_name + (s.track ? " · " + s.track : "") + "   [" + r.folder + "]");
     out.push("  Son çalışma : " + last);
     out.push("  Son 7 gün   : " + d7 + " gün, " + ses7 + " oturum, " + m7 + " mesaj");
     out.push("  Son 14 gün  : " + bar + "   (■ çalıştı · □ çalışmadı; en sağ bugün)");

@@ -10,7 +10,9 @@ export default {
     { id: "writing", tl: "書く", tr: "Yazma" },
     { id: "quiz", tl: "確認", tr: "Değerlendirme" },
   ],
-  levels: [
+  tracks: [{
+    id: "japan", title_tr: "Japonya'ya hazırlık", desc_tr: "Japonya'da yaşamak, okumak ve gezmek; günlük hayattan edebiyata.",
+    levels: [
     {
       id: "L1", title_tr: "Seviye 1 · Japonya'ya Varış", band: "N5–N4",
       units: [
@@ -122,5 +124,5 @@ export default {
           grammar: ["〜ば", "〜ても", "〜うちに"] },
       ],
     },
-  ],
+  ]}],
 };

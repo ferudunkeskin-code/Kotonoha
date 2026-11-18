@@ -8,16 +8,18 @@
 //   - uygulama açıkken 5 dakikada bir bakılır; son yedekten 30 dk geçmişse,
 //   - açılıştan 30 sn sonra, son yedek 1 günden eskiyse (açılışı yavaşlatmaz).
 // Boş bir hafıza asla yüklenmez: yeni kurulan uygulama eski yedeğin üstüne yazamaz.
-import { BACKUP_URL } from "./config.js";
+import * as config from "./config.js";
+const BACKUP_URL = config.BACKUP_URL;
 import * as store from "./store.js";
 import { pack } from "./lang/index.js";
-import { order as unitOrder } from "./curriculum.js";
+import { order as unitOrder, completedInTrack, track } from "./curriculum.js";
 
 const STATUS_KEY = `kotonoha-cloud-${pack.code}`;
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";      // karışan harfler yok (I, L, O, U)
 const REMIND_DAYS = 7;
 
 export const configured = () => !!BACKUP_URL;
+export const owner = () => config.BACKUP_OWNER || "Kotonoha yöneticisi";
 export const code = () => store.settings().backup_code || "";
 export const enabled = () => configured() && !!code();
 
@@ -72,7 +74,7 @@ export async function backupNow({ force = false } = {}) {
   inflight = (async () => {
     try {
       await call({ action: "save", code: code(), lang: pack.code, name: store.settings().learner_name,
-                   data: store.exportCompactJSON(), summary: { ...store.activitySummary(), units_total: unitOrder.length, lang_name: pack.nameTr } });
+                   data: store.exportCompactJSON(), summary: { ...store.activitySummary(), units_total: unitOrder().length, units_done: completedInTrack(store.completedUnits()), track: track().title_tr, lang_name: pack.nameTr } });
       setStatus({ last_at: new Date().toISOString(), last_rev: store.rev(), last_error: null });
       return "ok";
     } catch (e) {
